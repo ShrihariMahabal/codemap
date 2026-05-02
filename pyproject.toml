@@ -1,0 +1,30 @@
+[project]
+name = "codemap"
+version = "0.1.0"
+description = "A knowledge graph generator for Frappe Framework apps, powering intelligent support triage."
+requires-python = ">=3.10"
+dependencies = [
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+extract = [
+    "tree-sitter>=0.23.0",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+]
+cluster = ["graspologic"]
+watch = ["watchdog"]
+triage = ["openai", "beautifulsoup4", "pygments"]
+dev = ["pytest"]
+
+[project.scripts]
+codemap = "codemap.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
