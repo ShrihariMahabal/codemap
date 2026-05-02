@@ -1,0 +1,22 @@
+{
+    "actions": [],
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": ["customer", "items"],
+    "fields": [
+        {
+            "fieldname": "customer",
+            "fieldtype": "Link",
+            "label": "Customer",
+            "options": "Customer"
+        },
+        {
+            "fieldname": "items",
+            "fieldtype": "Table",
+            "label": "Items",
+            "options": "Sales Order Item"
+        }
+    ],
+    "name": "Sales Order",
+    "naming_rule": "By fieldname"
+}

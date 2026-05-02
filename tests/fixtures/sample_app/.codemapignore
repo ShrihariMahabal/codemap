@@ -1,0 +1,2 @@
+# Test files we want ignored
+test_app/selling/doctype/sales_order/test_*.py

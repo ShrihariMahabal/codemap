@@ -1,0 +1,6 @@
+{
+    "doctype": "Report",
+    "name": "Sales Analytics",
+    "ref_doctype": "Sales Order",
+    "report_type": "Script Report"
+}
