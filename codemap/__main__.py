@@ -67,9 +67,11 @@ def _cmd_detect(args: argparse.Namespace) -> None:
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:
-    """Run detection + Python extraction with caching."""
+    """Run detection + extraction for Python, JS, and Vue files."""
     from .cache import load_cached, save_cached
+    from .extract_js import extract_js
     from .extract_python import extract_python
+    from .extract_vue import extract_vue
     from .resolve import resolve_cross_file
 
     app_path = Path(args.app_path)
@@ -81,30 +83,45 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     result = detect(app_path)
     _print_detection_result(result)
 
-    # Step 2: Extract Python files
-    py_files = result["files"].get("code_py", [])
-    print(f"  extracting {len(py_files)} Python files...")
-
     all_results: list[dict] = []
-    cached_count = 0
-    extracted_count = 0
+    stats: dict[str, dict[str, int]] = {}
     start = time.time()
 
-    for fpath in py_files:
-        p = Path(fpath)
+    # Step 2: Extract each language
+    extractors = [
+        ("Python", "code_py", extract_python),
+        ("JavaScript", "code_js", extract_js),
+        ("Vue", "code_vue", extract_vue),
+    ]
 
-        # Try cache first
-        cached = load_cached(p, app_path)
-        if cached is not None:
-            all_results.append(cached)
-            cached_count += 1
+    for lang_name, file_key, extractor_fn in extractors:
+        files = result["files"].get(file_key, [])
+        if not files:
             continue
 
-        # Extract and cache
-        extraction = extract_python(p)
-        save_cached(p, extraction, app_path)
-        all_results.append(extraction)
-        extracted_count += 1
+        print(f"  extracting {len(files)} {lang_name} files...")
+        cached_count = 0
+        extracted_count = 0
+
+        for fpath in files:
+            p = Path(fpath)
+
+            cached = load_cached(p, app_path)
+            if cached is not None:
+                all_results.append(cached)
+                cached_count += 1
+                continue
+
+            extraction = extractor_fn(p)
+            save_cached(p, extraction, app_path)
+            all_results.append(extraction)
+            extracted_count += 1
+
+        stats[lang_name] = {
+            "extracted": extracted_count,
+            "cached": cached_count,
+            "total": len(files),
+        }
 
     elapsed = time.time() - start
 
@@ -116,10 +133,11 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     total_edges = sum(len(r.get("edges", [])) for r in all_results) + len(new_edges)
     total_raw = sum(len(r.get("raw_calls", [])) for r in all_results)
 
-    print(f"\n  codemap — Python extraction")
+    print(f"\n  codemap — extraction")
     print(f"  {'─' * 40}")
-    print(f"  {'extracted':<20s} {extracted_count:>5d}")
-    print(f"  {'from cache':<20s} {cached_count:>5d}")
+    for lang_name, s in stats.items():
+        print(f"  {lang_name:<12s}  {s['extracted']:>4d} extracted, {s['cached']:>4d} cached")
+    print(f"  {'─' * 40}")
     print(f"  {'nodes':<20s} {total_nodes:>5d}")
     print(f"  {'edges':<20s} {total_edges:>5d}")
     print(f"  {'cross-file calls':<20s} {len(new_edges):>5d}  (resolved from {total_raw} raw)")
