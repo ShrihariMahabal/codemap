@@ -66,12 +66,68 @@ def _cmd_detect(args: argparse.Namespace) -> None:
         _print_detection_result(result)
 
 
-def _cmd_extract(args: argparse.Namespace) -> None:
-    """Run detection + extraction for Python, JS, and Vue files."""
+def _run_extractor(
+    label: str,
+    files: list[str],
+    extractor_fn,
+    app_path: Path,
+) -> tuple[list[dict], dict | None]:
+    """Run *extractor_fn* over each file with cache lookup.
+
+    Returns ``(results, stats)`` — a list of per-file extraction dicts
+    and a small stats dict, or ``(None, None)`` shaped as ``([], None)``
+    when there are no files of this type.
+    """
+    if not files:
+        return [], None
+
     from .cache import load_cached, save_cached
+
+    print(f"  extracting {len(files)} {label} files...")
+    results: list[dict] = []
+    cached_count = 0
+    extracted_count = 0
+
+    for fpath in files:
+        p = Path(fpath)
+        cached = load_cached(p, app_path)
+        if cached is not None:
+            results.append(cached)
+            cached_count += 1
+            continue
+
+        extraction = extractor_fn(p)
+        save_cached(p, extraction, app_path)
+        results.append(extraction)
+        extracted_count += 1
+
+    stats = {
+        "extracted": extracted_count,
+        "cached": cached_count,
+        "total": len(files),
+    }
+    return results, stats
+
+
+def _cmd_extract(args: argparse.Namespace) -> None:
+    """Run detection + extraction across every supported file type.
+
+    Two passes:
+    1. Tree-sitter languages (Python, JS, Vue) — produce ``raw_calls``
+       that need cross-file resolution.
+    2. Frappe metadata (DocType JSONs, hooks.py, dashboards, modules.txt,
+       records) — pure dict extraction, no cross-file resolution needed.
+    """
     from .extract_js import extract_js
     from .extract_python import extract_python
     from .extract_vue import extract_vue
+    from .frappe_extract import (
+        extract_dashboard,
+        extract_doctype,
+        extract_hooks,
+        extract_modules,
+        extract_record,
+    )
     from .resolve import resolve_cross_file
 
     app_path = Path(args.app_path)
@@ -83,60 +139,44 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     result = detect(app_path)
     _print_detection_result(result)
 
+    # Step 2: Run every extractor.  Order doesn't matter for correctness —
+    # cross-file resolution is its own step and operates on raw_calls only.
+    extractors = [
+        ("Python",       "code_py",       extract_python),
+        ("JavaScript",   "code_js",       extract_js),
+        ("Vue",          "code_vue",      extract_vue),
+        ("DocType JSON", "doctype_json",  extract_doctype),
+        ("Hooks",        "hooks",         extract_hooks),
+        ("Dashboard",    "dashboard",     extract_dashboard),
+        ("Modules",      "modules_txt",   extract_modules),
+        ("Records",      "report_json",   extract_record),
+    ]
+
     all_results: list[dict] = []
     stats: dict[str, dict[str, int]] = {}
     start = time.time()
 
-    # Step 2: Extract each language
-    extractors = [
-        ("Python", "code_py", extract_python),
-        ("JavaScript", "code_js", extract_js),
-        ("Vue", "code_vue", extract_vue),
-    ]
-
-    for lang_name, file_key, extractor_fn in extractors:
+    for label, file_key, fn in extractors:
         files = result["files"].get(file_key, [])
-        if not files:
-            continue
-
-        print(f"  extracting {len(files)} {lang_name} files...")
-        cached_count = 0
-        extracted_count = 0
-
-        for fpath in files:
-            p = Path(fpath)
-
-            cached = load_cached(p, app_path)
-            if cached is not None:
-                all_results.append(cached)
-                cached_count += 1
-                continue
-
-            extraction = extractor_fn(p)
-            save_cached(p, extraction, app_path)
-            all_results.append(extraction)
-            extracted_count += 1
-
-        stats[lang_name] = {
-            "extracted": extracted_count,
-            "cached": cached_count,
-            "total": len(files),
-        }
+        results, s = _run_extractor(label, files, fn, app_path)
+        all_results.extend(results)
+        if s is not None:
+            stats[label] = s
 
     elapsed = time.time() - start
 
-    # Step 3: Cross-file resolution
+    # Step 3: Cross-file resolution (only language extractors emit raw_calls)
     new_nodes, new_edges = resolve_cross_file(all_results)
 
-    # Step 4: Collect stats
+    # Step 4: Aggregate counts
     total_nodes = sum(len(r.get("nodes", [])) for r in all_results) + len(new_nodes)
     total_edges = sum(len(r.get("edges", [])) for r in all_results) + len(new_edges)
     total_raw = sum(len(r.get("raw_calls", [])) for r in all_results)
 
     print(f"\n  codemap — extraction")
     print(f"  {'─' * 40}")
-    for lang_name, s in stats.items():
-        print(f"  {lang_name:<12s}  {s['extracted']:>4d} extracted, {s['cached']:>4d} cached")
+    for label, s in stats.items():
+        print(f"  {label:<14s}  {s['extracted']:>4d} extracted, {s['cached']:>4d} cached")
     print(f"  {'─' * 40}")
     print(f"  {'nodes':<20s} {total_nodes:>5d}")
     print(f"  {'edges':<20s} {total_edges:>5d}")
@@ -144,22 +184,19 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     print(f"  {'time':<20s} {elapsed:>5.1f}s")
     print()
 
-    # Step 5: Save merged extraction to codemap-out/
+    # Step 5: Save merged extraction to codemap-out/extraction.json
     out_dir = app_path / "codemap-out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    merged_nodes = []
-    merged_edges = []
+    merged_nodes: list[dict] = []
+    merged_edges: list[dict] = []
     for r in all_results:
         merged_nodes.extend(r.get("nodes", []))
         merged_edges.extend(r.get("edges", []))
     merged_nodes.extend(new_nodes)
     merged_edges.extend(new_edges)
 
-    extraction_out = {
-        "nodes": merged_nodes,
-        "edges": merged_edges,
-    }
+    extraction_out = {"nodes": merged_nodes, "edges": merged_edges}
     out_path = out_dir / "extraction.json"
     out_path.write_text(json.dumps(extraction_out, indent=2), encoding="utf-8")
     print(f"  saved → {out_path}")
