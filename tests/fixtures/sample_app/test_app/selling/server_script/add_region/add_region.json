@@ -1,0 +1,9 @@
+{
+ "doctype": "Server Script",
+ "name": "Add Region On Save",
+ "script_type": "DocType Event",
+ "doctype_event": "Before Save",
+ "reference_doctype": "Sales Order",
+ "disabled": 0,
+ "script": "doc.region = 'APAC'\nfrappe.msgprint('done')"
+}

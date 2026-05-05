@@ -4,12 +4,14 @@ from pathlib import Path
 import pytest
 
 from codemap.frappe_extract import (
+    extract_client_script,
     extract_dashboard,
     extract_doctype,
     extract_hooks,
     extract_modules,
     extract_notification,
     extract_record,
+    extract_server_script,
     extract_workflow,
 )
 from codemap.graph_primitives import make_id
@@ -22,6 +24,8 @@ MODULES_TXT = FIXTURE / "test_app/modules.txt"
 REPORT_JSON = FIXTURE / "test_app/selling/report/sales_analytics/sales_analytics.json"
 WORKFLOW_JSON = FIXTURE / "test_app/selling/workflow/sales_order_approval/sales_order_approval.json"
 NOTIFICATION_JSON = FIXTURE / "test_app/selling/notification/order_submitted/order_submitted.json"
+SERVER_SCRIPT_JSON = FIXTURE / "test_app/selling/server_script/add_region/add_region.json"
+CLIENT_SCRIPT_JSON = FIXTURE / "test_app/selling/client_script/highlight_total/highlight_total.json"
 
 
 # ── DocType JSON ────────────────────────────────────────────────────────────
@@ -698,6 +702,53 @@ class TestNotification:
         result = extract_notification(p)
         edges = [e for e in result["edges"] if e["relation"] == "notification_recipient"]
         assert edges == []
+
+
+# ── Server / Client Scripts ────────────────────────────────────────────────
+
+class TestServerScript:
+    def test_node_and_edge_emitted(self):
+        result = extract_server_script(SERVER_SCRIPT_JSON)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "server_script"]
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node["label"] == "Add Region On Save"
+        assert node["doctype_event"] == "Before Save"
+        assert "script" not in node  # Body is intentionally excluded
+        assert node["script_lines"] >= 1
+
+        edges = [e for e in result["edges"] if e["relation"] == "script_for"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
+    def test_handles_array_form(self, tmp_path):
+        p = tmp_path / "ss.json"
+        p.write_text("""[
+            {"doctype": "Server Script", "name": "A",
+             "reference_doctype": "Sales Order", "script": "x"},
+            {"doctype": "Server Script", "name": "B",
+             "reference_doctype": "Sales Invoice", "script": "y"}
+        ]""")
+        result = extract_server_script(p)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "server_script"]
+        assert len(nodes) == 2
+
+    def test_non_server_script_returns_empty(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text('{"doctype": "DocType", "name": "X"}')
+        assert extract_server_script(p) == {"nodes": [], "edges": []}
+
+
+class TestClientScript:
+    def test_node_and_edge_emitted(self):
+        result = extract_client_script(CLIENT_SCRIPT_JSON)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "client_script"]
+        assert len(nodes) == 1
+        assert nodes[0]["view"] == "Form"
+
+        edges = [e for e in result["edges"] if e["relation"] == "script_for"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
 
 
 # ── Smoke test on the dev-bench fixture ─────────────────────────────────────

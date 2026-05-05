@@ -122,12 +122,14 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     from .extract_python import extract_python
     from .extract_vue import extract_vue
     from .frappe_extract import (
+        extract_client_script,
         extract_dashboard,
         extract_doctype,
         extract_hooks,
         extract_modules,
         extract_notification,
         extract_record,
+        extract_server_script,
         extract_workflow,
     )
     from .resolve import resolve_cross_file
@@ -152,8 +154,10 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         ("Dashboard",    "dashboard",        extract_dashboard),
         ("Modules",      "modules_txt",      extract_modules),
         ("Records",      "report_json",      extract_record),
-        ("Workflow",     "workflow_json",    extract_workflow),
-        ("Notification", "notification_json", extract_notification),
+        ("Workflow",       "workflow_json",       extract_workflow),
+        ("Notification",   "notification_json",   extract_notification),
+        ("Server Script",  "server_script_json",  extract_server_script),
+        ("Client Script",  "client_script_json",  extract_client_script),
     ]
 
     all_results: list[dict] = []

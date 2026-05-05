@@ -16,14 +16,17 @@ from .hooks import extract_hooks
 from .modules import extract_modules
 from .notification import extract_notification
 from .record import extract_record
+from .scripts import extract_client_script, extract_server_script
 from .workflow import extract_workflow
 
 __all__ = [
+    "extract_client_script",
     "extract_dashboard",
     "extract_doctype",
     "extract_hooks",
     "extract_modules",
     "extract_notification",
     "extract_record",
+    "extract_server_script",
     "extract_workflow",
 ]

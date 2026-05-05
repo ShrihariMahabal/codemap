@@ -1,0 +1,8 @@
+{
+ "doctype": "Client Script",
+ "name": "Highlight Total",
+ "dt": "Sales Order",
+ "view": "Form",
+ "enabled": 1,
+ "script": "frappe.ui.form.on('Sales Order', { refresh(frm) {} });"
+}
