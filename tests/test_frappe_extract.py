@@ -489,6 +489,103 @@ class TestHooks:
         p.write_text('doc_events = {bad syntax')
         assert extract_hooks(p) == {"nodes": [], "edges": []}
 
+    def test_has_permission_emits_permission_hook_edge(self):
+        result = extract_hooks(HOOKS_PY)
+        perm_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "permission_hook"
+        ]
+        # has_permission + permission_query_conditions
+        assert len(perm_edges) == 2
+        targets = {e["target"] for e in perm_edges}
+        assert make_id("Sales Order") in targets
+
+    def test_permission_hooks_tagged_role(self):
+        result = extract_hooks(HOOKS_PY)
+        perm_handlers = [
+            n for n in result["nodes"]
+            if n["file_type"] == "hook" and n.get("role") == "permission"
+        ]
+        assert len(perm_handlers) == 2
+
+    def test_jinja_methods_tagged(self):
+        result = extract_hooks(HOOKS_PY)
+        jinja_nodes = [
+            n for n in result["nodes"]
+            if n["file_type"] == "hook" and n.get("role") == "jinja"
+        ]
+        # Three Jinja entries — the labelled "money:..." should keep
+        # only the right-hand callable as the node identifier.
+        labels = {n["label"] for n in jinja_nodes}
+        assert "test_app.utils.format_currency" in labels
+        assert "test_app.utils.format_money" in labels
+        assert "test_app.utils.titlecase" in labels
+
+    def test_app_include_assets_tagged(self):
+        result = extract_hooks(HOOKS_PY)
+        asset_nodes = [
+            n for n in result["nodes"]
+            if n["file_type"] == "hook" and n.get("role") == "app_include"
+        ]
+        kinds = {n["asset_kind"] for n in asset_nodes}
+        assert "app_include_js" in kinds
+        assert "app_include_css" in kinds
+
+    def test_request_and_session_hooks_tagged(self):
+        result = extract_hooks(HOOKS_PY)
+        request_hooks = [
+            n for n in result["nodes"] if n.get("role") == "request_hook"
+        ]
+        assert len(request_hooks) == 2
+        boot_hooks = [
+            n for n in result["nodes"] if n.get("role") == "boot_hook"
+        ]
+        assert len(boot_hooks) == 1
+
+    def test_regional_overrides_emit_country_metadata(self):
+        result = extract_hooks(HOOKS_PY)
+        regional_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "overrides" and e.get("scope") == "regional"
+        ]
+        assert len(regional_edges) == 1
+        assert regional_edges[0]["country"] == "India"
+
+    def test_fixtures_emit_export_edges(self):
+        result = extract_hooks(HOOKS_PY)
+        fix_edges = [
+            e for e in result["edges"] if e["relation"] == "exports_fixture"
+        ]
+        doctypes = {e["doctype"] for e in fix_edges}
+        assert "Custom Field" in doctypes
+        assert "Property Setter" in doctypes
+
+    def test_auto_cancel_exempted_emits_edges(self):
+        result = extract_hooks(HOOKS_PY)
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "auto_cancel_exempted"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["doctype"] == "Sales Invoice"
+
+    def test_dashboard_override(self):
+        result = extract_hooks(HOOKS_PY)
+        dash_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "overrides" and e.get("scope") == "dashboard"
+        ]
+        assert len(dash_edges) == 1
+        assert dash_edges[0]["target"] == make_id("Sales Order")
+
+    def test_doctype_list_js_treated_like_doctype_js(self, tmp_path):
+        p = tmp_path / "hooks.py"
+        p.write_text('doctype_list_js = {"Sales Order": "public/js/so_list.js"}\n')
+        result = extract_hooks(p)
+        edges = [e for e in result["edges"] if e["relation"] == "extends_client"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
 
 # ── Smoke test on the dev-bench fixture ─────────────────────────────────────
 
