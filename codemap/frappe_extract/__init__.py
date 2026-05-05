@@ -10,6 +10,7 @@ isolated — they don't read each other's output, and on any parse error
 they return an empty result rather than raising.
 """
 
+from .customizations import extract_custom_field, extract_property_setter
 from .dashboard import extract_dashboard
 from .doctype import extract_doctype
 from .hooks import extract_hooks
@@ -21,11 +22,13 @@ from .workflow import extract_workflow
 
 __all__ = [
     "extract_client_script",
+    "extract_custom_field",
     "extract_dashboard",
     "extract_doctype",
     "extract_hooks",
     "extract_modules",
     "extract_notification",
+    "extract_property_setter",
     "extract_record",
     "extract_server_script",
     "extract_workflow",

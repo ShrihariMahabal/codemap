@@ -5,11 +5,13 @@ import pytest
 
 from codemap.frappe_extract import (
     extract_client_script,
+    extract_custom_field,
     extract_dashboard,
     extract_doctype,
     extract_hooks,
     extract_modules,
     extract_notification,
+    extract_property_setter,
     extract_record,
     extract_server_script,
     extract_workflow,
@@ -26,6 +28,8 @@ WORKFLOW_JSON = FIXTURE / "test_app/selling/workflow/sales_order_approval/sales_
 NOTIFICATION_JSON = FIXTURE / "test_app/selling/notification/order_submitted/order_submitted.json"
 SERVER_SCRIPT_JSON = FIXTURE / "test_app/selling/server_script/add_region/add_region.json"
 CLIENT_SCRIPT_JSON = FIXTURE / "test_app/selling/client_script/highlight_total/highlight_total.json"
+CUSTOM_FIELD_JSON = FIXTURE / "test_app/fixtures/custom_field.json"
+PROPERTY_SETTER_JSON = FIXTURE / "test_app/fixtures/property_setter.json"
 
 
 # ── DocType JSON ────────────────────────────────────────────────────────────
@@ -749,6 +753,56 @@ class TestClientScript:
         edges = [e for e in result["edges"] if e["relation"] == "script_for"]
         assert len(edges) == 1
         assert edges[0]["target"] == make_id("Sales Order")
+
+
+# ── Custom Field / Property Setter ─────────────────────────────────────────
+
+class TestCustomField:
+    def test_node_and_edge_emitted(self):
+        result = extract_custom_field(CUSTOM_FIELD_JSON)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "custom_field"]
+        assert len(nodes) == 1
+        assert nodes[0]["fieldname"] == "region"
+        assert nodes[0]["fieldtype"] == "Data"
+        assert nodes[0]["insert_after"] == "customer"
+
+        edges = [e for e in result["edges"] if e["relation"] == "custom_field_on"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
+    def test_non_custom_field_returns_empty(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text('{"doctype": "DocType", "name": "X"}')
+        assert extract_custom_field(p) == {"nodes": [], "edges": []}
+
+
+class TestPropertySetter:
+    def test_node_and_edge_emitted(self):
+        result = extract_property_setter(PROPERTY_SETTER_JSON)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "property_setter"]
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node["field_name"] == "customer"
+        assert node["property"] == "reqd"
+        assert node["value"] == "1"
+
+        edges = [e for e in result["edges"] if e["relation"] == "property_override_on"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
+    def test_handles_single_dict_form(self, tmp_path):
+        p = tmp_path / "ps.json"
+        p.write_text("""{
+            "doctype": "Property Setter",
+            "name": "X-y-z",
+            "doc_type": "Sales Order",
+            "field_name": "y",
+            "property": "z",
+            "value": "1"
+        }""")
+        result = extract_property_setter(p)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "property_setter"]
+        assert len(nodes) == 1
 
 
 # ── Smoke test on the dev-bench fixture ─────────────────────────────────────
