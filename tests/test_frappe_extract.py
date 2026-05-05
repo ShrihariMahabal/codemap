@@ -90,9 +90,10 @@ class TestDocType:
         assert len(mod_edges) == 1
         assert mod_edges[0]["target"] == make_id("Selling")
 
-    def test_no_module_edge_when_module_missing(self):
-        # The fixture sales_order.json has no "module" key
-        result = extract_doctype(DOCTYPE_JSON)
+    def test_no_module_edge_when_module_missing(self, tmp_path):
+        p = tmp_path / "no_module.json"
+        p.write_text('{"doctype": "DocType", "name": "NoMod", "fields": []}')
+        result = extract_doctype(p)
         mod_edges = [e for e in result["edges"] if e["relation"] == "belongs_to_module"]
         assert mod_edges == []
 
@@ -123,6 +124,49 @@ class TestDocType:
 
     def test_missing_file_returns_empty(self, tmp_path):
         assert extract_doctype(tmp_path / "nope.json") == {"nodes": [], "edges": []}
+
+    def test_behavioural_flags_on_doctype_node(self):
+        result = extract_doctype(DOCTYPE_JSON)
+        node = next(n for n in result["nodes"] if n["file_type"] == "doctype")
+        assert node["is_submittable"] == 1
+        assert node["track_changes"] == 1
+        assert node["autoname"] == "naming_series:"
+
+    def test_permission_role_nodes_emitted(self):
+        result = extract_doctype(DOCTYPE_JSON)
+        roles = {n["label"] for n in result["nodes"] if n["file_type"] == "role"}
+        assert "Sales User" in roles
+        assert "Sales Manager" in roles
+
+    def test_permitted_role_edges(self):
+        result = extract_doctype(DOCTYPE_JSON)
+        perm_edges = [
+            e for e in result["edges"] if e["relation"] == "permitted_role"
+        ]
+        assert len(perm_edges) == 2
+
+        manager = next(e for e in perm_edges if e["role"] == "Sales Manager")
+        assert manager["delete"] == 1
+        assert manager["export"] == 1
+        assert manager["submit"] == 1
+
+        user = next(e for e in perm_edges if e["role"] == "Sales User")
+        assert user["read"] == 1
+        assert user["write"] == 1
+        # Sales User in fixture doesn't have delete
+        assert "delete" not in user
+
+    def test_permission_with_no_role_skipped(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text("""{
+            "doctype": "DocType",
+            "name": "X",
+            "fields": [],
+            "permissions": [{"read": 1}]
+        }""")
+        result = extract_doctype(p)
+        perm_edges = [e for e in result["edges"] if e["relation"] == "permitted_role"]
+        assert perm_edges == []
 
 
 # ── Modules ─────────────────────────────────────────────────────────────────

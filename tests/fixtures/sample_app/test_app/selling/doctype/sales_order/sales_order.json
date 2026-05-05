@@ -2,13 +2,20 @@
     "actions": [],
     "doctype": "DocType",
     "engine": "InnoDB",
-    "field_order": ["customer", "items"],
+    "field_order": ["customer", "customer_name", "items"],
     "fields": [
         {
             "fieldname": "customer",
             "fieldtype": "Link",
             "label": "Customer",
             "options": "Customer"
+        },
+        {
+            "fieldname": "customer_name",
+            "fieldtype": "Data",
+            "label": "Customer Name",
+            "fetch_from": "customer.customer_name",
+            "read_only": 1
         },
         {
             "fieldname": "items",
@@ -18,5 +25,32 @@
         }
     ],
     "name": "Sales Order",
-    "naming_rule": "By fieldname"
+    "naming_rule": "By \"Naming Series\" field",
+    "autoname": "naming_series:",
+    "is_submittable": 1,
+    "track_changes": 1,
+    "module": "Selling",
+    "permissions": [
+        {
+            "role": "Sales User",
+            "read": 1,
+            "write": 1,
+            "create": 1,
+            "submit": 1,
+            "cancel": 1,
+            "amend": 1
+        },
+        {
+            "role": "Sales Manager",
+            "read": 1,
+            "write": 1,
+            "create": 1,
+            "delete": 1,
+            "submit": 1,
+            "cancel": 1,
+            "amend": 1,
+            "export": 1,
+            "import": 1
+        }
+    ]
 }
