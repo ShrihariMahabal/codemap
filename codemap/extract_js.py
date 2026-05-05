@@ -293,6 +293,108 @@ def _extract_cscript_assignment(node, source: bytes, file_nid: str, str_path: st
     return edges
 
 
+# ── listview_settings detection ───────────────────────────────────────────
+
+def _extract_listview_settings(
+    node,
+    source: bytes,
+    file_nid: str,
+    str_path: str,
+) -> list[dict]:
+    """Detect ``frappe.listview_settings["DocType"] = {...}`` assignments.
+
+    The DocType lives in the subscript: ``frappe.listview_settings["X"]``.
+    Anything other than a string-literal subscript is ignored — we won't
+    invent an edge from a dynamic key.
+    """
+    if node.type != "expression_statement":
+        return []
+
+    edges: list[dict] = []
+    for child in node.children:
+        if child.type != "assignment_expression":
+            continue
+        left = child.child_by_field_name("left")
+        if left is None or left.type != "subscript_expression":
+            continue
+
+        obj = left.child_by_field_name("object")
+        index = left.child_by_field_name("index")
+        if obj is None or index is None or index.type != "string":
+            continue
+
+        if read_node_text(obj, source) != "frappe.listview_settings":
+            continue
+
+        doctype = _extract_string_content(index, source)
+        if not doctype:
+            continue
+
+        edges.append(make_edge(
+            file_nid,
+            make_id(doctype),
+            "extends_list_view",
+            str_path,
+            child.start_point[0] + 1,
+            confidence="INFERRED",
+            doctype=doctype,
+        ))
+
+    return edges
+
+
+# ── Vue 3 composition API detection ───────────────────────────────────────
+
+def _extract_define_emits(
+    node,
+    source: bytes,
+    file_nid: str,
+    str_path: str,
+) -> list[dict]:
+    """Detect Vue 3 ``defineEmits(['event1', 'event2'])`` declarations.
+
+    Only the array form is handled — the object form
+    (``defineEmits({event: validator})``) is rare in Frappe's Vue code
+    and would require validator-shape parsing for marginal value.
+    """
+    if node.type != "expression_statement":
+        return []
+
+    edges: list[dict] = []
+    for child in node.children:
+        if child.type != "call_expression":
+            continue
+        func = child.child_by_field_name("function")
+        if func is None or func.type != "identifier":
+            continue
+        if read_node_text(func, source) != "defineEmits":
+            continue
+
+        args = child.child_by_field_name("arguments")
+        if args is None:
+            continue
+
+        for arg in args.children:
+            if arg.type != "array":
+                continue
+            for elem in arg.children:
+                if elem.type == "string":
+                    event = _extract_string_content(elem, source)
+                    if not event:
+                        continue
+                    edges.append(make_edge(
+                        file_nid,
+                        make_id("event", event),
+                        "emits_event",
+                        str_path,
+                        child.start_point[0] + 1,
+                        confidence="EXTRACTED",
+                        event=event,
+                    ))
+
+    return edges
+
+
 # ── Main extraction ────────────────────────────────────────────────────────
 
 def extract_js(path: Path) -> dict:
@@ -336,11 +438,17 @@ def extract_js(path: Path) -> dict:
             edges.extend(_extract_js_import(node, source, file_nid, str_path))
             return
 
-        # cur_frm.cscript assignments
+        # cur_frm.cscript / listview_settings / defineEmits — top-level
+        # assignments and calls that produce edges without a containing
+        # function.  They're checked together so a single statement can
+        # yield more than one edge type if it ever needs to.
         if t == "expression_statement":
-            cscript_edges = _extract_cscript_assignment(node, source, file_nid, str_path)
-            if cscript_edges:
-                edges.extend(cscript_edges)
+            top_level_edges: list[dict] = []
+            top_level_edges.extend(_extract_cscript_assignment(node, source, file_nid, str_path))
+            top_level_edges.extend(_extract_listview_settings(node, source, file_nid, str_path))
+            top_level_edges.extend(_extract_define_emits(node, source, file_nid, str_path))
+            if top_level_edges:
+                edges.extend(top_level_edges)
                 return
 
             # Check if this is a frappe.ui.form.on() call

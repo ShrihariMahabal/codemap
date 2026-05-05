@@ -205,3 +205,51 @@ class TestFrappeDbJs:
         assert len(sub_edges) == 1
         assert sub_edges[0]["event"] == "order_update"
         assert sub_edges[0]["confidence"] == "INFERRED"
+
+
+class TestListviewSettings:
+    """Tests for frappe.listview_settings['DT'] assignments."""
+
+    def _extract_snippet(self, code: str) -> dict:
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(code)
+            f.flush()
+            return extract_js(Path(f.name))
+
+    def test_listview_settings_extends_list_view(self):
+        result = self._extract_snippet('''
+frappe.listview_settings["Sales Order"] = {
+    add_fields: ["customer", "status"],
+    onload: function(listview) {}
+};
+''')
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "extends_list_view"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["doctype"] == "Sales Order"
+
+
+class TestVue3CompositionApi:
+    """Tests for Vue 3 defineEmits detection."""
+
+    def _extract_snippet(self, code: str) -> dict:
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(code)
+            f.flush()
+            return extract_js(Path(f.name))
+
+    def test_define_emits_array(self):
+        result = self._extract_snippet('''
+defineEmits(['save', 'cancel']);
+''')
+        edges = [e for e in result["edges"] if e["relation"] == "emits_event"]
+        events = {e["event"] for e in edges}
+        assert events == {"save", "cancel"}
