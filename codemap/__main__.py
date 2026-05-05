@@ -126,6 +126,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         extract_doctype,
         extract_hooks,
         extract_modules,
+        extract_notification,
         extract_record,
         extract_workflow,
     )
@@ -152,6 +153,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         ("Modules",      "modules_txt",      extract_modules),
         ("Records",      "report_json",      extract_record),
         ("Workflow",     "workflow_json",    extract_workflow),
+        ("Notification", "notification_json", extract_notification),
     ]
 
     all_results: list[dict] = []

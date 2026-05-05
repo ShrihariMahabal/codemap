@@ -8,6 +8,7 @@ from codemap.frappe_extract import (
     extract_doctype,
     extract_hooks,
     extract_modules,
+    extract_notification,
     extract_record,
     extract_workflow,
 )
@@ -20,6 +21,7 @@ DASHBOARD_PY = FIXTURE / "test_app/selling/doctype/sales_order/sales_order_dashb
 MODULES_TXT = FIXTURE / "test_app/modules.txt"
 REPORT_JSON = FIXTURE / "test_app/selling/report/sales_analytics/sales_analytics.json"
 WORKFLOW_JSON = FIXTURE / "test_app/selling/workflow/sales_order_approval/sales_order_approval.json"
+NOTIFICATION_JSON = FIXTURE / "test_app/selling/notification/order_submitted/order_submitted.json"
 
 
 # ── DocType JSON ────────────────────────────────────────────────────────────
@@ -646,6 +648,56 @@ class TestWorkflow:
         result = extract_workflow(p)
         transitions = [e for e in result["edges"] if e["relation"] == "workflow_transition"]
         assert transitions == []
+
+
+# ── Notification ────────────────────────────────────────────────────────────
+
+class TestNotification:
+    def test_notification_node_with_metadata(self):
+        result = extract_notification(NOTIFICATION_JSON)
+        nodes = [n for n in result["nodes"] if n["file_type"] == "notification"]
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node["label"] == "Order Submitted"
+        assert node["event"] == "Submit"
+        assert node["channel"] == "Email"
+
+    def test_notification_for_doctype_edge(self):
+        result = extract_notification(NOTIFICATION_JSON)
+        edges = [e for e in result["edges"] if e["relation"] == "notification_for"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
+    def test_recipient_role_edge(self):
+        result = extract_notification(NOTIFICATION_JSON)
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "notification_recipient"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["role"] == "Sales Manager"
+
+    def test_role_node_created(self):
+        result = extract_notification(NOTIFICATION_JSON)
+        roles = {n["label"] for n in result["nodes"] if n["file_type"] == "role"}
+        assert roles == {"Sales Manager"}
+
+    def test_non_notification_returns_empty(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text('{"doctype": "DocType", "name": "X"}')
+        assert extract_notification(p) == {"nodes": [], "edges": []}
+
+    def test_recipient_without_role_skipped(self, tmp_path):
+        p = tmp_path / "n.json"
+        p.write_text("""{
+            "doctype": "Notification",
+            "name": "N",
+            "document_type": "Sales Order",
+            "recipients": [{"receiver_by_document_field": "owner"}]
+        }""")
+        result = extract_notification(p)
+        edges = [e for e in result["edges"] if e["relation"] == "notification_recipient"]
+        assert edges == []
 
 
 # ── Smoke test on the dev-bench fixture ─────────────────────────────────────
