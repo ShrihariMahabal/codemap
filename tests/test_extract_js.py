@@ -167,3 +167,30 @@ import FormField from "@/components/FormField.vue";
 ''')
         import_edges = [e for e in result["edges"] if e["relation"] == "imports_from"]
         assert len(import_edges) == 2
+
+
+class TestFrappeDbJs:
+    """Tests for frappe.db.* and frappe.client.* ORM call detection."""
+
+    def test_frappe_db_get_value(self):
+        """frappe.db.get_value('Customer', ...) emits queries_doctype edge."""
+        result = extract_js(SALES_ORDER_JS)
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "queries_doctype"
+            and e.get("doctype") == "Customer"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["confidence"] == "INFERRED"
+        assert edges[0]["via"] == "frappe.db.get_value"
+
+    def test_frappe_client_get_list(self):
+        """frappe.client.get_list({doctype: ...}) emits queries_doctype edge."""
+        result = extract_js(SALES_ORDER_JS)
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "queries_doctype"
+            and e.get("doctype") == "Sales Invoice"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["via"] == "frappe.client.get_list"

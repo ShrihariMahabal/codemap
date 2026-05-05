@@ -26,6 +26,12 @@ function validate_customer(frm) {
 	if (!frm.doc.customer) {
 		frappe.throw(__("Please select a customer"));
 	}
+	frappe.db.get_value("Customer", frm.doc.customer, "is_frozen");
+	frappe.client.get_list({
+		doctype: "Sales Invoice",
+		filters: { customer: frm.doc.customer }
+	});
+	frappe.realtime.on("order_update", function(data) {});
 }
 
 /**

@@ -6,6 +6,9 @@ patterns from .js files:
 - frappe.call({method: "dotted.path"}) — calls_api edges
 - frappe.xcall("dotted.path") — calls_api edges
 - erpnext.utils.map_current_doc({method: "..."}) — calls_api edges
+- frappe.db.get_value / frappe.client.get_list — queries_doctype edges
+- frappe.realtime.on("event", ...) — subscribes_to_event edges
+- frappe.listview_settings["DT"] = {...} — extends_list_view edges
 - cur_frm.cscript.xxx = "DocType" — references to DocType
 - ES6 class declarations
 """
@@ -15,6 +18,36 @@ from __future__ import annotations
 from pathlib import Path
 
 from .graph_primitives import make_edge, make_id, make_node, read_node_text
+
+
+# ── Frappe JS API surface ──────────────────────────────────────────────────
+
+# Client-side ORM entry points whose first positional argument is a
+# DocType name string.  These are the JS analogues of the Python
+# ``frappe.db.*`` family handled in extract_python.py.
+_JS_DB_METHODS: frozenset[str] = frozenset({
+    "frappe.db.get_value",
+    "frappe.db.get_list",
+    "frappe.db.get_doc",
+    "frappe.db.exists",
+    "frappe.db.count",
+    "frappe.db.set_value",
+    "frappe.db.insert",
+    "frappe.db.delete",
+})
+
+# ``frappe.client.*`` calls take an options object whose ``doctype``
+# property names the target.  Same shape as ``frappe.call`` but the
+# semantics is a structured query, not a method invocation.
+_JS_CLIENT_METHODS: frozenset[str] = frozenset({
+    "frappe.client.get_list",
+    "frappe.client.get_count",
+    "frappe.client.get_value",
+    "frappe.client.get",
+    "frappe.client.set_value",
+    "frappe.client.insert",
+    "frappe.client.delete",
+})
 
 
 # ── Tree-sitter setup ──────────────────────────────────────────────────────
@@ -66,14 +99,58 @@ def _extract_string_content(string_node, source: bytes) -> str | None:
 
 def _find_method_property(obj_node, source: bytes) -> str | None:
     """Find the 'method' key inside an object literal {method: "..."}."""
+    return _find_string_property(obj_node, source, "method")
+
+
+def _find_string_property(obj_node, source: bytes, name: str) -> str | None:
+    """Return the string value of ``name: "..."`` in an object literal.
+
+    Mirrors ``_find_method_property`` but parameterised on the key.
+    Used to extract ``doctype: "Customer"`` from ``frappe.client.*``
+    options objects.
+    """
     for child in obj_node.children:
-        if child.type == "pair":
-            key = child.child_by_field_name("key")
-            value = child.child_by_field_name("value")
-            if key and value:
-                key_text = read_node_text(key, source)
-                if key_text == "method" and value.type == "string":
-                    return _extract_string_content(value, source)
+        if child.type != "pair":
+            continue
+        key = child.child_by_field_name("key")
+        value = child.child_by_field_name("value")
+        if not key or not value:
+            continue
+        key_text = read_node_text(key, source)
+        if key_text == name and value.type == "string":
+            return _extract_string_content(value, source)
+    return None
+
+
+def _first_call_string_arg(call_node, source: bytes) -> str | None:
+    """Return the first positional string-literal argument of a call.
+
+    Skips object literals and other non-string positional arguments,
+    so callers can rely on the result being a real string the user
+    typed (not a reference we silently coerced).
+    """
+    args = call_node.child_by_field_name("arguments")
+    if args is None:
+        return None
+    for child in args.children:
+        if child.type == "string":
+            return _extract_string_content(child, source)
+        if child.type in ("(", ")", ","):
+            continue
+        # First non-string positional ends the search.
+        if child.type not in ("comment",):
+            return None
+    return None
+
+
+def _first_call_object_arg(call_node, source: bytes):
+    """Return the first object-literal argument node, or None."""
+    args = call_node.child_by_field_name("arguments")
+    if args is None:
+        return None
+    for child in args.children:
+        if child.type == "object":
+            return child
     return None
 
 
@@ -443,6 +520,40 @@ def extract_js(path: Path) -> dict:
                             node.start_point[0] + 1,
                             confidence="INFERRED",
                             api_path=api_path,
+                        ))
+
+                # frappe.db.* — first positional string is the DocType.
+                elif func_text in _JS_DB_METHODS:
+                    doctype = _first_call_string_arg(node, source)
+                    if doctype:
+                        edges.append(make_edge(
+                            caller_nid,
+                            make_id(doctype),
+                            "queries_doctype",
+                            str_path,
+                            node.start_point[0] + 1,
+                            confidence="INFERRED",
+                            doctype=doctype,
+                            via=func_text,
+                        ))
+
+                # frappe.client.* — DocType lives inside an options object.
+                elif func_text in _JS_CLIENT_METHODS:
+                    obj = _first_call_object_arg(node, source)
+                    doctype = (
+                        _find_string_property(obj, source, "doctype")
+                        if obj is not None else None
+                    )
+                    if doctype:
+                        edges.append(make_edge(
+                            caller_nid,
+                            make_id(doctype),
+                            "queries_doctype",
+                            str_path,
+                            node.start_point[0] + 1,
+                            confidence="INFERRED",
+                            doctype=doctype,
+                            via=func_text,
                         ))
 
                 # Regular function calls — try intra-file resolution
