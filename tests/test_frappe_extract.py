@@ -9,6 +9,7 @@ from codemap.frappe_extract import (
     extract_hooks,
     extract_modules,
     extract_record,
+    extract_workflow,
 )
 from codemap.graph_primitives import make_id
 
@@ -18,6 +19,7 @@ HOOKS_PY = FIXTURE / "test_app/hooks.py"
 DASHBOARD_PY = FIXTURE / "test_app/selling/doctype/sales_order/sales_order_dashboard.py"
 MODULES_TXT = FIXTURE / "test_app/modules.txt"
 REPORT_JSON = FIXTURE / "test_app/selling/report/sales_analytics/sales_analytics.json"
+WORKFLOW_JSON = FIXTURE / "test_app/selling/workflow/sales_order_approval/sales_order_approval.json"
 
 
 # ── DocType JSON ────────────────────────────────────────────────────────────
@@ -585,6 +587,65 @@ class TestHooks:
         edges = [e for e in result["edges"] if e["relation"] == "extends_client"]
         assert len(edges) == 1
         assert edges[0]["target"] == make_id("Sales Order")
+
+
+# ── Workflow ────────────────────────────────────────────────────────────────
+
+class TestWorkflow:
+    def test_workflow_node_created(self):
+        result = extract_workflow(WORKFLOW_JSON)
+        wf_nodes = [n for n in result["nodes"] if n["file_type"] == "workflow"]
+        assert len(wf_nodes) == 1
+        assert wf_nodes[0]["label"] == "Sales Order Approval"
+
+    def test_workflow_for_doctype_edge(self):
+        result = extract_workflow(WORKFLOW_JSON)
+        edges = [e for e in result["edges"] if e["relation"] == "workflow_for"]
+        assert len(edges) == 1
+        assert edges[0]["target"] == make_id("Sales Order")
+
+    def test_state_nodes_created(self):
+        result = extract_workflow(WORKFLOW_JSON)
+        states = {n["label"] for n in result["nodes"] if n["file_type"] == "workflow_state"}
+        assert states == {"Draft", "Approved"}
+
+    def test_has_state_edges(self):
+        result = extract_workflow(WORKFLOW_JSON)
+        has_state = [e for e in result["edges"] if e["relation"] == "has_state"]
+        assert len(has_state) == 2
+
+    def test_transition_edge(self):
+        result = extract_workflow(WORKFLOW_JSON)
+        transitions = [
+            e for e in result["edges"] if e["relation"] == "workflow_transition"
+        ]
+        assert len(transitions) == 1
+        edge = transitions[0]
+        assert edge["action"] == "Approve"
+        assert edge["allowed"] == "Sales Manager"
+        assert edge["from_state"] == "Draft"
+        assert edge["to_state"] == "Approved"
+
+    def test_non_workflow_returns_empty(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text('{"doctype": "DocType", "name": "X"}')
+        assert extract_workflow(p) == {"nodes": [], "edges": []}
+
+    def test_transition_with_unknown_state_skipped(self, tmp_path):
+        p = tmp_path / "wf.json"
+        p.write_text("""{
+            "doctype": "Workflow",
+            "name": "W",
+            "document_type": "Sales Order",
+            "states": [{"state": "Draft", "doc_status": "0"}],
+            "transitions": [
+                {"state": "Draft", "next_state": "Ghost",
+                 "action": "Approve", "allowed": "Manager"}
+            ]
+        }""")
+        result = extract_workflow(p)
+        transitions = [e for e in result["edges"] if e["relation"] == "workflow_transition"]
+        assert transitions == []
 
 
 # ── Smoke test on the dev-bench fixture ─────────────────────────────────────

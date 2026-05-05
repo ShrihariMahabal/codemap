@@ -15,6 +15,7 @@ from .doctype import extract_doctype
 from .hooks import extract_hooks
 from .modules import extract_modules
 from .record import extract_record
+from .workflow import extract_workflow
 
 __all__ = [
     "extract_dashboard",
@@ -22,4 +23,5 @@ __all__ = [
     "extract_hooks",
     "extract_modules",
     "extract_record",
+    "extract_workflow",
 ]

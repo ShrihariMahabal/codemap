@@ -127,6 +127,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         extract_hooks,
         extract_modules,
         extract_record,
+        extract_workflow,
     )
     from .resolve import resolve_cross_file
 
@@ -142,14 +143,15 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     # Step 2: Run every extractor.  Order doesn't matter for correctness —
     # cross-file resolution is its own step and operates on raw_calls only.
     extractors = [
-        ("Python",       "code_py",       extract_python),
-        ("JavaScript",   "code_js",       extract_js),
-        ("Vue",          "code_vue",      extract_vue),
-        ("DocType JSON", "doctype_json",  extract_doctype),
-        ("Hooks",        "hooks",         extract_hooks),
-        ("Dashboard",    "dashboard",     extract_dashboard),
-        ("Modules",      "modules_txt",   extract_modules),
-        ("Records",      "report_json",   extract_record),
+        ("Python",       "code_py",          extract_python),
+        ("JavaScript",   "code_js",          extract_js),
+        ("Vue",          "code_vue",         extract_vue),
+        ("DocType JSON", "doctype_json",     extract_doctype),
+        ("Hooks",        "hooks",            extract_hooks),
+        ("Dashboard",    "dashboard",        extract_dashboard),
+        ("Modules",      "modules_txt",      extract_modules),
+        ("Records",      "report_json",      extract_record),
+        ("Workflow",     "workflow_json",    extract_workflow),
     ]
 
     all_results: list[dict] = []
