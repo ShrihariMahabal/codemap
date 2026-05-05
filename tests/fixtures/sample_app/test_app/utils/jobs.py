@@ -8,3 +8,10 @@ def schedule_things():
     frappe.enqueue_doc("Sales Order", "SO-0001", "on_submit")
     frappe.publish_realtime("order_created", message={"id": 1})
     frappe.sendmail(recipients=["a@b.com"], subject="hi", message="hey")
+
+
+def re_run(doc):
+    doc.save()
+    doc.submit()
+    doc.run_method("validate")
+    doc.run_method(some_dynamic_name)

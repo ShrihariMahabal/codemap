@@ -225,6 +225,45 @@ class TestSideEffectExtraction:
         assert len(mail_edges) == 1
         assert mail_edges[0]["confidence"] == "INFERRED"
 
+
+class TestDocLifecycleExtraction:
+    """Tests for doc.submit / cancel / save / run_method detection."""
+
+    def test_doc_submit_save(self):
+        """doc.save() and doc.submit() emit calls_lifecycle edges."""
+        result = extract_python(JOBS)
+        actions = [
+            e.get("action") for e in result["edges"]
+            if e["relation"] == "calls_lifecycle"
+            and e.get("action") in ("save", "submit")
+        ]
+        assert "save" in actions
+        assert "submit" in actions
+
+    def test_run_method_with_string(self):
+        """doc.run_method('validate') emits an AMBIGUOUS calls_lifecycle edge."""
+        result = extract_python(JOBS)
+        edges = [
+            e for e in result["edges"]
+            if e["relation"] == "calls_lifecycle"
+            and e.get("action") == "run_method"
+            and e.get("method") == "validate"
+        ]
+        assert len(edges) == 1
+        assert edges[0]["confidence"] == "AMBIGUOUS"
+
+    def test_run_method_with_variable(self):
+        """doc.run_method(varname) is captured as AMBIGUOUS without method."""
+        result = extract_python(JOBS)
+        ambiguous = [
+            e for e in result["edges"]
+            if e["relation"] == "calls_lifecycle"
+            and e.get("action") == "run_method"
+            and "method" not in e
+        ]
+        assert len(ambiguous) == 1
+        assert ambiguous[0]["confidence"] == "AMBIGUOUS"
+
     def test_frappe_db_sql_queries_doctype(self):
         """frappe.db.sql with `tabSales Order` should produce queries_doctype edge."""
         result = extract_python(REPORT)

@@ -277,6 +277,23 @@ _EMAIL_FUNCS: frozenset[str] = frozenset({
     "frappe.email.smtp.sendmail",
 })
 
+# Lifecycle actions invoked on a Frappe document object.  We restrict
+# matching to common doc identifier names (self, doc, *_doc) to avoid
+# false positives from unrelated objects with a ``.save()`` method.
+_DOC_LIFECYCLE_ACTIONS: frozenset[str] = frozenset({
+    "save", "insert", "submit", "cancel", "delete",
+    "reload", "rename",
+    "db_set", "db_update",
+})
+
+# Identifier names we treat as likely Frappe document objects.  This
+# is heuristic — covers the conventions used across frappe and erpnext
+# without flagging arbitrary ``request.save()`` calls.
+_DOC_IDENTIFIERS: frozenset[str] = frozenset({
+    "self", "doc", "parent_doc", "child_doc", "source_doc",
+    "target_doc", "new_doc", "old_doc",
+})
+
 
 def _extract_side_effect_call(
     node,
@@ -381,6 +398,80 @@ def _enqueue_edges(
     # follow the identifier but cross-file references aren't worth the
     # ambiguity here — the caller still flags as enqueueing *something*
     # via the call edge that walk_calls produces separately.
+    return []
+
+
+def _extract_doc_lifecycle_call(
+    node,
+    source: bytes,
+    caller_nid: str,
+    str_path: str,
+) -> list[dict]:
+    """Emit ``calls_lifecycle`` edges for ``doc.submit()``-style calls.
+
+    These calls re-enter the Frappe document machinery (running every
+    registered ``hooked_on`` handler again) — triage cares about them
+    because a "double submit" or unexpected validate cascade often
+    starts here.
+
+    We don't know the DocType statically, so the edge target is a
+    synthetic action node like ``frappe.doc.submit``.  ``run_method``
+    is treated separately: when the method name is a string literal we
+    can record it (still AMBIGUOUS confidence — we don't know which
+    DocType's method runs); when it's a variable we record the call
+    against a single ``frappe.doc.run_method`` placeholder.
+    """
+    func_node = node.child_by_field_name("function")
+    if not func_node or func_node.type != "attribute":
+        return []
+
+    obj = func_node.child_by_field_name("object")
+    attr = func_node.child_by_field_name("attribute")
+    if obj is None or attr is None or obj.type != "identifier":
+        return []
+
+    obj_name = read_node_text(obj, source)
+    if obj_name not in _DOC_IDENTIFIERS:
+        return []
+
+    attr_name = read_node_text(attr, source)
+    line = node.start_point[0] + 1
+
+    if attr_name in _DOC_LIFECYCLE_ACTIONS:
+        return [make_edge(
+            caller_nid,
+            make_id("frappe.doc", attr_name),
+            "calls_lifecycle",
+            str_path, line,
+            confidence="INFERRED",
+            action=attr_name,
+            via=obj_name,
+        )]
+
+    if attr_name == "run_method":
+        args = node.child_by_field_name("arguments")
+        method_name = _first_string_arg(args, source) if args else None
+        if method_name:
+            return [make_edge(
+                caller_nid,
+                make_id(method_name),
+                "calls_lifecycle",
+                str_path, line,
+                confidence="AMBIGUOUS",
+                action="run_method",
+                method=method_name,
+                via=obj_name,
+            )]
+        return [make_edge(
+            caller_nid,
+            make_id("frappe.doc.run_method"),
+            "calls_lifecycle",
+            str_path, line,
+            confidence="AMBIGUOUS",
+            action="run_method",
+            via=obj_name,
+        )]
+
     return []
 
 
@@ -732,6 +823,11 @@ def extract_python(path: Path) -> dict:
 
             # ── Background jobs / realtime / email side effects ──
             edges.extend(_extract_side_effect_call(
+                node, source, caller_nid, str_path,
+            ))
+
+            # ── doc.submit() / doc.run_method(...) ──
+            edges.extend(_extract_doc_lifecycle_call(
                 node, source, caller_nid, str_path,
             ))
 
