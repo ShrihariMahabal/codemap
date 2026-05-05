@@ -1,14 +1,16 @@
 """Python AST extraction via tree-sitter.
 
 Extracts classes, functions, methods, imports, inheritance, call graph,
-Frappe ORM calls, @frappe.whitelist() tagging, and rationale comments
-from .py files.
+Frappe ORM calls, @frappe.whitelist() tagging, lifecycle / permission
+method tagging, background-job and realtime side effects, and rationale
+comments from .py files.
 
 The extraction is split into two passes:
 1. Structure pass: walk the AST top-down to find classes, functions,
    imports, and inheritance. Collect function bodies for pass 2.
 2. Call-graph pass: walk each function body to find calls (both
-   intra-file and cross-file) and Frappe ORM calls.
+   intra-file and cross-file), Frappe ORM calls, background-job
+   enqueues, and other side-effect patterns.
 """
 
 from __future__ import annotations
@@ -17,6 +19,57 @@ import re
 from pathlib import Path
 
 from .graph_primitives import make_edge, make_id, make_node, read_node_text
+
+
+# ── Frappe lifecycle / permission method names ─────────────────────────────
+
+# Methods on a DocType controller named one of these have Frappe-defined
+# semantics (called automatically on submit, save, validate, etc.).
+# Tagging them with ``role = "lifecycle"`` lets the triage layer find
+# every handler that fires for a given DocType event without needing to
+# parse hooks.py or doc_events.
+_LIFECYCLE_METHODS: frozenset[str] = frozenset({
+    "validate",
+    "before_insert", "after_insert",
+    "before_save", "before_validate", "on_update",
+    "before_submit", "on_submit",
+    "before_cancel", "on_cancel", "after_cancel",
+    "before_update_after_submit", "on_update_after_submit",
+    "on_change",
+    "on_trash", "after_delete",
+    "before_rename", "after_rename",
+    "on_payment_authorized",
+    "autoname",
+})
+
+# Permission hooks override Frappe's default access checks.  Same idea
+# as lifecycle methods — tag with ``role = "permission"`` so the
+# triage layer can answer "why was this user denied?" by walking
+# permission_hook edges instead of every method on the controller.
+_PERMISSION_METHODS: frozenset[str] = frozenset({
+    "has_permission",
+    "get_permission_query_conditions",
+    "has_website_permission",
+})
+
+
+def _doctype_from_controller_path(str_path: str) -> str | None:
+    """Return the DocType name (snake_case) for a controller file path.
+
+    Frappe DocType controllers live at ``*/doctype/{name}/{name}.py``.
+    For any other path we return ``None`` so callers know the file is
+    not a controller and shouldn't get lifecycle / permission edges
+    pointing at a DocType node.
+    """
+    parts = Path(str_path).parts
+    if len(parts) < 3:
+        return None
+    if parts[-3] != "doctype":
+        return None
+    parent = parts[-2]
+    if Path(str_path).stem != parent:
+        return None
+    return parent
 
 
 # ── Tree-sitter setup ──────────────────────────────────────────────────────
@@ -406,13 +459,24 @@ def extract_python(path: Path) -> dict:
             is_api = _has_frappe_whitelist(node, source)
             node_type = "api" if is_api else "code"
 
+            # Lifecycle / permission tagging — only for methods (not
+            # module-level functions named "validate" etc.).
+            role: str | None = None
+            if parent_class_nid is not None:
+                if func_name in _LIFECYCLE_METHODS:
+                    role = "lifecycle"
+                elif func_name in _PERMISSION_METHODS:
+                    role = "permission"
+
             if func_nid not in seen_ids:
-                extra = {}
+                extra: dict = {}
                 if is_api:
                     # Build a stable dotted API path for triage matching
                     # e.g. erpnext.selling.doctype.sales_order.sales_order.make_invoice
                     parts = Path(str_path).with_suffix("").parts
                     extra["api_path"] = ".".join(parts) + "." + func_name
+                if role is not None:
+                    extra["role"] = role
 
                 nodes.append(make_node(
                     func_nid, label, node_type, str_path,
@@ -424,6 +488,23 @@ def extract_python(path: Path) -> dict:
             edges.append(make_edge(
                 edge_source, func_nid, relation, str_path, line_start,
             ))
+
+            # If this method belongs to a DocType controller, link the
+            # DocType node directly to the lifecycle / permission method.
+            # Triage uses these edges as "what fires when X is submitted?"
+            # / "what permission hooks govern access to X?" lookups.
+            if role is not None:
+                doctype_name = _doctype_from_controller_path(str_path)
+                if doctype_name is not None:
+                    edge_relation = (
+                        "lifecycle_method" if role == "lifecycle"
+                        else "permission_hook"
+                    )
+                    edges.append(make_edge(
+                        make_id(doctype_name), func_nid, edge_relation,
+                        str_path, line_start,
+                        method=func_name,
+                    ))
 
             # Docstring
             body = node.child_by_field_name("body")

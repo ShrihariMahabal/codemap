@@ -108,6 +108,49 @@ class TestPythonExtraction:
         result = extract_python(CONTROLLER)
         assert "error" not in result
 
+    def test_lifecycle_methods_tagged(self):
+        """validate() and on_submit() should be tagged with role='lifecycle'."""
+        result = extract_python(CONTROLLER)
+        lifecycle = [n for n in result["nodes"] if n.get("role") == "lifecycle"]
+        labels = {n["label"] for n in lifecycle}
+        assert ".validate()" in labels
+        assert ".on_submit()" in labels
+
+    def test_lifecycle_method_edge_from_doctype(self):
+        """A lifecycle_method edge should connect Sales Order → its lifecycle methods."""
+        result = extract_python(CONTROLLER)
+        lifecycle_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "lifecycle_method"
+        ]
+        assert len(lifecycle_edges) >= 2
+        methods_hit = {e.get("method") for e in lifecycle_edges}
+        assert "validate" in methods_hit
+        assert "on_submit" in methods_hit
+
+    def test_permission_method_tagged(self):
+        """has_permission() should be tagged with role='permission'."""
+        result = extract_python(CONTROLLER)
+        permission_nodes = [n for n in result["nodes"] if n.get("role") == "permission"]
+        labels = {n["label"] for n in permission_nodes}
+        assert ".has_permission()" in labels
+
+    def test_permission_hook_edge_from_doctype(self):
+        """A permission_hook edge should connect Sales Order → has_permission."""
+        result = extract_python(CONTROLLER)
+        perm_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "permission_hook"
+        ]
+        assert len(perm_edges) == 1
+        assert perm_edges[0].get("method") == "has_permission"
+
+    def test_module_function_not_tagged_as_lifecycle(self):
+        """A top-level function named validate() should NOT get lifecycle role."""
+        result = extract_python(REPORT)
+        for n in result["nodes"]:
+            assert n.get("role") != "lifecycle"
+
 
 class TestSharedController:
     """Test extraction of shared controllers (not inside doctype/ dirs)."""

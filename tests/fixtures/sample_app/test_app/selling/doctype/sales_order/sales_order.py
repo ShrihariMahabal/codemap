@@ -14,3 +14,6 @@ class SalesOrder(Document):
     @frappe.whitelist()
     def on_submit(self):
         frappe.msgprint("Sales Order submitted")
+
+    def has_permission(self, ptype, user):
+        return True
