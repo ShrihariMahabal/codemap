@@ -537,6 +537,21 @@ def extract_js(path: Path) -> dict:
                             via=func_text,
                         ))
 
+                # frappe.realtime.on("event", handler) — JS subscribes to
+                # an event that the Python side raises with publish_realtime.
+                elif func_text == "frappe.realtime.on":
+                    event = _first_call_string_arg(node, source)
+                    if event:
+                        edges.append(make_edge(
+                            caller_nid,
+                            make_id("event", event),
+                            "subscribes_to_event",
+                            str_path,
+                            node.start_point[0] + 1,
+                            confidence="INFERRED",
+                            event=event,
+                        ))
+
                 # frappe.client.* — DocType lives inside an options object.
                 elif func_text in _JS_CLIENT_METHODS:
                     obj = _first_call_object_arg(node, source)

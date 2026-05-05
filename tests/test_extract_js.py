@@ -194,3 +194,14 @@ class TestFrappeDbJs:
         ]
         assert len(edges) == 1
         assert edges[0]["via"] == "frappe.client.get_list"
+
+    def test_frappe_realtime_on(self):
+        """frappe.realtime.on('event', ...) emits subscribes_to_event."""
+        result = extract_js(SALES_ORDER_JS)
+        sub_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "subscribes_to_event"
+        ]
+        assert len(sub_edges) == 1
+        assert sub_edges[0]["event"] == "order_update"
+        assert sub_edges[0]["confidence"] == "INFERRED"
