@@ -106,6 +106,7 @@ def extract_doctype(path: Path) -> dict:
 
     edges.extend(_module_edges(data, doctype_nid, str_path))
     edges.extend(_field_edges(data, doctype_nid, str_path))
+    edges.extend(_fetch_from_edges(data, doctype_nid, str_path))
 
     perm_nodes, perm_edges = _permission_graph(data, name, doctype_nid, str_path)
     nodes.extend(perm_nodes)
@@ -256,3 +257,56 @@ def _permission_graph(
         ))
 
     return nodes, edges
+
+
+def _fetch_from_edges(data: dict, doctype_nid: str, str_path: str) -> list[dict]:
+    """Emit a ``fetch_from`` edge for every field with a ``fetch_from`` set.
+
+    A ``fetch_from`` value looks like ``"customer.customer_name"`` — the
+    runtime engine resolves it by looking up the local Link field
+    (``customer``) and reading the named attribute on the linked doc.
+    The source DocType therefore comes from the Link field's
+    ``options``, which we resolve via a quick fieldname→target map.
+
+    Fields whose ``fetch_from`` references an unknown link field, or
+    whose Link target isn't a string, are skipped silently — we'd
+    rather miss an inferred edge than fabricate the wrong target.
+    """
+    fields = data.get("fields")
+    if not isinstance(fields, list):
+        return []
+
+    link_targets: dict[str, str] = {}
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        if field.get("fieldtype") != "Link":
+            continue
+        fieldname = field.get("fieldname")
+        options = field.get("options")
+        if isinstance(fieldname, str) and isinstance(options, str) and options.strip():
+            link_targets[fieldname] = options.strip()
+
+    edges: list[dict] = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        fetch_from = field.get("fetch_from")
+        if not isinstance(fetch_from, str) or "." not in fetch_from:
+            continue
+        link_fieldname, _, source_field = fetch_from.partition(".")
+        source_doctype = link_targets.get(link_fieldname)
+        if source_doctype is None or not source_field:
+            continue
+
+        edges.append(make_edge(
+            doctype_nid, make_id(source_doctype), "fetch_from",
+            str_path, 1,
+            confidence="INFERRED",
+            fieldname=field.get("fieldname", ""),
+            link_field=link_fieldname,
+            source_field=source_field,
+            source_doctype=source_doctype,
+        ))
+
+    return edges

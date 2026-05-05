@@ -156,6 +156,31 @@ class TestDocType:
         # Sales User in fixture doesn't have delete
         assert "delete" not in user
 
+    def test_fetch_from_edge_resolves_via_link_field(self):
+        """customer_name's fetch_from='customer.customer_name' → edge to Customer."""
+        result = extract_doctype(DOCTYPE_JSON)
+        fetch_edges = [e for e in result["edges"] if e["relation"] == "fetch_from"]
+        assert len(fetch_edges) == 1
+        edge = fetch_edges[0]
+        assert edge["target"] == make_id("Customer")
+        assert edge["link_field"] == "customer"
+        assert edge["source_field"] == "customer_name"
+        assert edge["confidence"] == "INFERRED"
+
+    def test_fetch_from_skipped_when_link_field_unknown(self, tmp_path):
+        p = tmp_path / "x.json"
+        p.write_text("""{
+            "doctype": "DocType",
+            "name": "X",
+            "fields": [
+                {"fieldname": "customer_name", "fieldtype": "Data",
+                 "fetch_from": "nonexistent.field"}
+            ]
+        }""")
+        result = extract_doctype(p)
+        fetch_edges = [e for e in result["edges"] if e["relation"] == "fetch_from"]
+        assert fetch_edges == []
+
     def test_permission_with_no_role_skipped(self, tmp_path):
         p = tmp_path / "x.json"
         p.write_text("""{
