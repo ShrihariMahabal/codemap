@@ -229,6 +229,187 @@ def _first_string_arg(args_node, source: bytes) -> str | None:
     return None
 
 
+def _kwarg_string(args_node, source: bytes, name: str) -> str | None:
+    """Return the string value of ``name=...`` if present, else ``None``.
+
+    Walks the immediate children of an ``arguments`` node looking for a
+    ``keyword_argument`` whose name matches *name* and whose value is a
+    string literal.  Used to pull ``method="..."``, ``event="..."`` and
+    similar named arguments out of Frappe API calls.
+    """
+    for child in args_node.children:
+        if child.type != "keyword_argument":
+            continue
+        key = child.child_by_field_name("name")
+        value = child.child_by_field_name("value")
+        if not key or not value:
+            continue
+        if read_node_text(key, source) != name:
+            continue
+        if value.type == "string":
+            return _string_content(value, source)
+    return None
+
+
+# ── Frappe side-effect call detection ──────────────────────────────────────
+
+# Function paths that enqueue background jobs.  Both ``enqueue`` (which
+# takes a method path or callable) and ``enqueue_doc`` (which takes a
+# doctype + name + method name) end up running on a worker, so support
+# tickets about "this didn't run" usually start by walking these edges.
+_ENQUEUE_FUNCS: frozenset[str] = frozenset({
+    "frappe.enqueue",
+    "frappe.enqueue_doc",
+})
+
+# Realtime publishers — the first positional argument is the event name
+# the browser subscribes to via ``frappe.realtime.on(event, ...)``.
+_REALTIME_FUNCS: frozenset[str] = frozenset({
+    "frappe.publish_realtime",
+    "frappe.realtime.publish",
+})
+
+# Email-sending entry points.  We only emit a "this caller sends mail"
+# marker — the actual recipients/subject are runtime values.
+_EMAIL_FUNCS: frozenset[str] = frozenset({
+    "frappe.sendmail",
+    "frappe.email.queue.send",
+    "frappe.email.smtp.sendmail",
+})
+
+
+def _extract_side_effect_call(
+    node,
+    source: bytes,
+    caller_nid: str,
+    str_path: str,
+) -> list[dict]:
+    """Emit edges for Frappe background-job, realtime, and email calls.
+
+    These all share the same shape: a top-level ``frappe.X(...)`` call
+    whose semantics matter for triage even though no DocType is touched
+    directly.  Each pattern produces one edge from the caller into a
+    synthetic target node identified by the string argument we manage
+    to recover; if the argument is dynamic, no edge is emitted (we
+    don't fabricate AMBIGUOUS edges with unknown targets).
+    """
+    edges: list[dict] = []
+
+    func_node = node.child_by_field_name("function")
+    if not func_node:
+        return edges
+
+    func_text = read_node_text(func_node, source)
+    args = node.child_by_field_name("arguments")
+    if args is None:
+        return edges
+
+    line = node.start_point[0] + 1
+
+    if func_text in _ENQUEUE_FUNCS:
+        edges.extend(_enqueue_edges(func_text, args, source, caller_nid, str_path, line))
+
+    elif func_text in _REALTIME_FUNCS:
+        event = _kwarg_string(args, source, "event") or _first_string_arg(args, source)
+        if event:
+            edges.append(make_edge(
+                caller_nid, make_id("event", event), "publishes_event",
+                str_path, line,
+                confidence="INFERRED",
+                event=event,
+            ))
+
+    elif func_text in _EMAIL_FUNCS:
+        # No structural target here — we tag the caller with a stable
+        # placeholder so downstream queries can find every site that
+        # sends mail without needing to scan every call edge again.
+        edges.append(make_edge(
+            caller_nid, make_id("frappe.sendmail"), "sends_email",
+            str_path, line,
+            confidence="INFERRED",
+            via=func_text,
+        ))
+
+    return edges
+
+
+def _enqueue_edges(
+    func_text: str,
+    args_node,
+    source: bytes,
+    caller_nid: str,
+    str_path: str,
+    line: int,
+) -> list[dict]:
+    """Resolve the target of a ``frappe.enqueue`` / ``enqueue_doc`` call.
+
+    - ``frappe.enqueue("dotted.path", ...)`` → enqueue dotted.path
+    - ``frappe.enqueue(method="dotted.path", ...)`` → enqueue dotted.path
+    - ``frappe.enqueue(some_callable, ...)`` → callable name (intra-file)
+    - ``frappe.enqueue_doc("DocType", "name", "method")`` → DocType.method
+
+    Returns ``[]`` when the target can't be statically resolved — we'd
+    rather have no edge than one pointing at a guess.
+    """
+    if func_text == "frappe.enqueue_doc":
+        # Positional: (doctype, name, method, ...).  The third positional
+        # string arg is the method name on the doc.
+        positionals = _positional_strings(args_node, source, limit=3)
+        if len(positionals) >= 3:
+            doctype, _name, method = positionals[0], positionals[1], positionals[2]
+            return [make_edge(
+                caller_nid,
+                make_id(doctype, method),
+                "enqueues_job",
+                str_path, line,
+                confidence="INFERRED",
+                doctype=doctype,
+                method=method,
+            )]
+        return []
+
+    method = _kwarg_string(args_node, source, "method") or _first_string_arg(args_node, source)
+    if method:
+        return [make_edge(
+            caller_nid, make_id(method), "enqueues_job",
+            str_path, line,
+            confidence="INFERRED",
+            method=method,
+        )]
+
+    # Callable reference: frappe.enqueue(my_function, ...).  We could
+    # follow the identifier but cross-file references aren't worth the
+    # ambiguity here — the caller still flags as enqueueing *something*
+    # via the call edge that walk_calls produces separately.
+    return []
+
+
+def _positional_strings(args_node, source: bytes, limit: int) -> list[str]:
+    """Return the first *limit* positional string-literal arguments.
+
+    Skips keyword arguments entirely.  Stops collecting as soon as it
+    reaches a non-string positional, so ``("DT", varname, "method")``
+    returns just ``["DT"]`` — we never silently treat a variable
+    reference as if it were a literal.
+    """
+    out: list[str] = []
+    for child in args_node.children:
+        if child.type in ("(", ")", ","):
+            continue
+        if child.type == "keyword_argument":
+            continue
+        if child.type == "string":
+            value = _string_content(child, source)
+            if value is None:
+                break
+            out.append(value)
+            if len(out) >= limit:
+                break
+        else:
+            break
+    return out
+
+
 def _string_content(string_node, source: bytes) -> str | None:
     """Extract the text content of a string node (without quotes)."""
     for child in string_node.children:
@@ -548,6 +729,11 @@ def extract_python(path: Path) -> dict:
                 node, source, caller_nid, str_path,
             )
             edges.extend(orm_edges)
+
+            # ── Background jobs / realtime / email side effects ──
+            edges.extend(_extract_side_effect_call(
+                node, source, caller_nid, str_path,
+            ))
 
             # ── Regular function calls ──
             func_node = node.child_by_field_name("function")

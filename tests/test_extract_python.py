@@ -8,6 +8,7 @@ FIXTURE_APP = Path(__file__).parent / "fixtures" / "sample_app"
 CONTROLLER = FIXTURE_APP / "test_app" / "selling" / "doctype" / "sales_order" / "sales_order.py"
 SHARED_CTRL = FIXTURE_APP / "test_app" / "controllers" / "selling_controller.py"
 REPORT = FIXTURE_APP / "test_app" / "selling" / "report" / "sales_analytics" / "sales_analytics.py"
+JOBS = FIXTURE_APP / "test_app" / "utils" / "jobs.py"
 
 
 class TestPythonExtraction:
@@ -179,6 +180,50 @@ class TestReportExtraction:
             if "execute" in n["label"]
         ]
         assert len(func_nodes) >= 1
+
+
+class TestSideEffectExtraction:
+    """Tests for frappe.enqueue / publish_realtime / sendmail edges."""
+
+    def test_enqueue_string_method(self):
+        """frappe.enqueue("dotted.path") emits an enqueues_job edge."""
+        result = extract_python(JOBS)
+        enqueue_edges = [
+            e for e in result["edges"] if e["relation"] == "enqueues_job"
+        ]
+        methods = {e.get("method") for e in enqueue_edges}
+        assert "test_app.tasks.run_nightly" in methods
+        assert "test_app.tasks.update_totals" in methods
+
+    def test_enqueue_doc(self):
+        """frappe.enqueue_doc('DT', 'name', 'method') emits enqueues_job."""
+        result = extract_python(JOBS)
+        enqueue_edges = [
+            e for e in result["edges"]
+            if e["relation"] == "enqueues_job"
+            and e.get("doctype") == "Sales Order"
+        ]
+        assert len(enqueue_edges) == 1
+        assert enqueue_edges[0]["method"] == "on_submit"
+
+    def test_publish_realtime(self):
+        """frappe.publish_realtime('event') emits publishes_event edge."""
+        result = extract_python(JOBS)
+        evt_edges = [
+            e for e in result["edges"] if e["relation"] == "publishes_event"
+        ]
+        assert len(evt_edges) == 1
+        assert evt_edges[0]["event"] == "order_created"
+        assert evt_edges[0]["confidence"] == "INFERRED"
+
+    def test_sendmail(self):
+        """frappe.sendmail(...) emits sends_email edge."""
+        result = extract_python(JOBS)
+        mail_edges = [
+            e for e in result["edges"] if e["relation"] == "sends_email"
+        ]
+        assert len(mail_edges) == 1
+        assert mail_edges[0]["confidence"] == "INFERRED"
 
     def test_frappe_db_sql_queries_doctype(self):
         """frappe.db.sql with `tabSales Order` should produce queries_doctype edge."""
