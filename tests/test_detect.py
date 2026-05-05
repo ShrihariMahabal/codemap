@@ -72,6 +72,42 @@ class TestClassifyFile:
         path = FIXTURE_APP / "test_app/__init__.py"
         assert classify_file(path, FIXTURE_APP) == FileType.CODE_PY
 
+    def test_workflow_json_detected(self):
+        path = FIXTURE_APP / "test_app/selling/workflow/sales_order_approval/sales_order_approval.json"
+        assert classify_file(path, FIXTURE_APP) == FileType.WORKFLOW_JSON
+
+    def test_notification_json_detected(self):
+        path = FIXTURE_APP / "test_app/selling/notification/order_submitted/order_submitted.json"
+        assert classify_file(path, FIXTURE_APP) == FileType.NOTIFICATION_JSON
+
+    def test_print_format_json_detected(self):
+        path = FIXTURE_APP / "test_app/selling/print_format/sales_order_classic/sales_order_classic.json"
+        assert classify_file(path, FIXTURE_APP) == FileType.PRINT_FORMAT_JSON
+
+    def test_custom_field_fixture_detected(self):
+        path = FIXTURE_APP / "test_app/fixtures/custom_field.json"
+        assert classify_file(path, FIXTURE_APP) == FileType.CUSTOM_FIELD_JSON
+
+    def test_property_setter_fixture_detected(self):
+        path = FIXTURE_APP / "test_app/fixtures/property_setter.json"
+        assert classify_file(path, FIXTURE_APP) == FileType.PROPERTY_SETTER_JSON
+
+    def test_patches_txt_detected(self):
+        path = FIXTURE_APP / "test_app/patches.txt"
+        assert classify_file(path, FIXTURE_APP) == FileType.PATCHES_TXT
+
+    def test_bundle_js_detected(self):
+        path = FIXTURE_APP / "test_app/public/js/test_app.bundle.js"
+        assert classify_file(path, FIXTURE_APP) == FileType.BUNDLE_JS
+
+    def test_template_html_detected(self):
+        path = FIXTURE_APP / "test_app/templates/pages/order.html"
+        assert classify_file(path, FIXTURE_APP) == FileType.TEMPLATE_HTML
+
+    def test_style_scss_detected(self):
+        path = FIXTURE_APP / "test_app/public/scss/main.scss"
+        assert classify_file(path, FIXTURE_APP) == FileType.STYLE_SCSS
+
 
 class TestDetect:
     """Integration tests for the full detect() function."""

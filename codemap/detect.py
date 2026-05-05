@@ -18,6 +18,10 @@ from .security import is_sensitive
 # ── Skip rules ──────────────────────────────────────────────────────────────
 
 # Directories that are never useful to traverse.
+#
+# Note: ``patches`` and ``fixtures`` are intentionally NOT skipped — patches
+# define migration functions we want to index, and fixtures contain custom
+# fields, property setters, workflows, and other graph-relevant records.
 SKIP_DIRS: set[str] = {
     # Python
     "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
@@ -31,7 +35,7 @@ SKIP_DIRS: set[str] = {
     # Version control
     ".git",
     # Frappe-specific noise
-    "locale", "patches", "change_log", "cypress",
+    "locale", "change_log", "cypress",
     # Our own output
     "codemap-out",
 }
@@ -43,57 +47,89 @@ SKIP_FILES: set[str] = {
 }
 
 
-# ── Frappe-aware classification ─────────────────────────────────────────────
+# ── JSON record classification ──────────────────────────────────────────────
 
-def _is_doctype_json(path: Path) -> bool:
-    """Return True if *path* is a DocType schema JSON.
+# Maps the top-level ``"doctype"`` field of a record JSON to the FileType
+# we classify it as.  Anything not in this map and not a DocType definition
+# falls back to RECORD_JSON.
+_RECORD_TYPE_MAP: dict[str, FileType] = {
+    "Workflow": FileType.WORKFLOW_JSON,
+    "Notification": FileType.NOTIFICATION_JSON,
+    "Server Script": FileType.SERVER_SCRIPT_JSON,
+    "Client Script": FileType.CLIENT_SCRIPT_JSON,
+    "Print Format": FileType.PRINT_FORMAT_JSON,
+    "Web Form": FileType.WEB_FORM_JSON,
+    "Page": FileType.PAGE_JSON,
+    "Custom Field": FileType.CUSTOM_FIELD_JSON,
+    "Property Setter": FileType.PROPERTY_SETTER_JSON,
+    "Report": FileType.REPORT_JSON,
+}
 
-    A DocType JSON lives at ``*/doctype/{name}/{name}.json`` and contains
-    ``"doctype": "DocType"`` at the top level.  We check the path pattern
-    first (cheap) and only read the file if it matches.
+
+def _read_json_doctype(path: Path) -> str | None:
+    """Return the value of the top-level ``"doctype"`` key, or None.
+
+    Frappe fixture files are typically lists of records — each element
+    carries its own ``"doctype"`` key.  We treat a list whose first
+    element declares a doctype as a record file of that kind.
+    Files that aren't valid JSON or don't expose a doctype anywhere
+    return ``None`` and are left unclassified.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+
+    if isinstance(data, dict):
+        kind = data.get("doctype")
+        return kind if isinstance(kind, str) else None
+
+    if isinstance(data, list) and data:
+        first = data[0]
+        if isinstance(first, dict):
+            kind = first.get("doctype")
+            return kind if isinstance(kind, str) else None
+
+    return None
+
+
+def _is_doctype_path(path: Path) -> bool:
+    """Return True if *path* matches the DocType JSON path convention.
+
+    A DocType JSON lives at ``*/doctype/{name}/{name}.json``.  We check
+    the path pattern as a cheap pre-filter before reading the file.
     """
     parts = path.parts
-    # Pattern: .../doctype/{name}/{name}.json
-    # Need at least 3 parts: [..., "doctype", "{name}", "{name}.json"]
     if len(parts) < 3:
         return False
     if parts[-3] != "doctype":
         return False
-    expected_name = parts[-2]
-    if path.stem != expected_name:
-        return False
-
-    # Path pattern matches — confirm by reading the JSON
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("doctype") == "DocType"
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return False
+    return path.stem == parts[-2]
 
 
-def _is_report_json(path: Path) -> bool:
-    """Return True if *path* is a Report definition JSON.
+def _classify_json(path: Path) -> FileType | None:
+    """Classify a ``.json`` file by reading its top-level ``"doctype"`` key.
 
-    A Report JSON lives at ``*/report/{name}/{name}.json`` and contains
-    ``"doctype": "Report"`` at the top level.
+    Priority: DocType definitions (path-aware) > known record kinds >
+    generic record JSON.  Files without a ``"doctype"`` key (e.g.
+    ``package.json``) are left unclassified.
     """
-    parts = path.parts
-    if len(parts) < 3:
-        return False
-    if parts[-3] != "report":
-        return False
-    expected_name = parts[-2]
-    if path.stem != expected_name:
-        return False
+    kind = _read_json_doctype(path)
+    if kind is None:
+        return None
 
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("doctype") == "Report"
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return False
+    if kind == "DocType" and _is_doctype_path(path):
+        return FileType.DOCTYPE_JSON
 
+    mapped = _RECORD_TYPE_MAP.get(kind)
+    if mapped is not None:
+        return mapped
+
+    return FileType.RECORD_JSON
+
+
+# ── Frappe-aware classification ─────────────────────────────────────────────
 
 def _is_hooks_py(path: Path, app_root: Path) -> bool:
     """Return True if *path* is the app-level hooks.py.
@@ -104,10 +140,6 @@ def _is_hooks_py(path: Path, app_root: Path) -> bool:
     """
     if path.name != "hooks.py":
         return False
-    # hooks.py should be exactly one level below app_root
-    # e.g. app_root = apps/erpnext, hooks at apps/erpnext/erpnext/hooks.py
-    # We detect this by checking that the parent is a direct child of app_root
-    # OR the parent IS app_root (for flat layouts).
     try:
         rel = path.relative_to(app_root)
         # Expected: {app_pkg}/hooks.py → 2 parts
@@ -124,7 +156,6 @@ def _is_dashboard_py(path: Path) -> bool:
     """
     if not path.name.endswith("_dashboard.py"):
         return False
-    # Must be inside a doctype directory
     return "doctype" in path.parts
 
 
@@ -139,6 +170,28 @@ def _is_modules_txt(path: Path, app_root: Path) -> bool:
         return False
 
 
+def _is_patches_txt(path: Path, app_root: Path) -> bool:
+    """Return True if *path* is the app's patches.txt."""
+    if path.name != "patches.txt":
+        return False
+    try:
+        rel = path.relative_to(app_root)
+        return len(rel.parts) == 2
+    except ValueError:
+        return False
+
+
+def _is_bundle_js(path: Path) -> bool:
+    """Return True for ``*.bundle.js`` / ``*.bundle.scss`` entry points.
+
+    Frappe and ERPNext use ``foo.bundle.js`` as a convention for build
+    entry points compiled by esbuild.  These reference many other files
+    and behave differently from regular ``.js`` modules.
+    """
+    name = path.name
+    return name.endswith(".bundle.js") or name.endswith(".bundle.scss")
+
+
 def _has_real_content(path: Path) -> bool:
     """Return True if a Python __init__.py has meaningful content.
 
@@ -150,7 +203,6 @@ def _has_real_content(path: Path) -> bool:
     except OSError:
         return False
 
-    # Strip encoding declaration and docstrings
     lines = [
         line for line in text.splitlines()
         if line.strip()
@@ -168,35 +220,34 @@ def classify_file(path: Path, app_root: Path) -> FileType | None:
     empty __init__.py, or unrecognised extensions).
 
     Classification priority:
-    1. Frappe metadata files (hooks, doctype json, etc.) — most specific.
-    2. Source code files by extension.
-    3. Documentation files.
+    1. App-level fixed filenames (modules.txt, hooks.py, patches.txt) —
+       these match by exact name and location.
+    2. JSON record classification by ``"doctype"`` key.
+    3. Source code by extension.
+    4. Templates / stylesheets / documentation.
     """
     name = path.name
     ext = path.suffix.lower()
 
-    # ── Frappe metadata (checked first — more specific than extension) ──
-
     if name == "modules.txt" and _is_modules_txt(path, app_root):
         return FileType.MODULES_TXT
+
+    if name == "patches.txt" and _is_patches_txt(path, app_root):
+        return FileType.PATCHES_TXT
 
     if name == "hooks.py" and _is_hooks_py(path, app_root):
         return FileType.HOOKS
 
     if ext == ".json":
-        if _is_doctype_json(path):
-            return FileType.DOCTYPE_JSON
-        if _is_report_json(path):
-            return FileType.REPORT_JSON
-        return None  # Other JSON files (package.json, etc.) are not useful
+        return _classify_json(path)
 
     if _is_dashboard_py(path):
         return FileType.DASHBOARD
 
-    # ── Source code ──
+    if _is_bundle_js(path):
+        return FileType.BUNDLE_JS
 
     if ext == ".py":
-        # Skip empty __init__.py files
         if name == "__init__.py" and not _has_real_content(path):
             return None
         return FileType.CODE_PY
@@ -207,9 +258,18 @@ def classify_file(path: Path, app_root: Path) -> FileType | None:
     if ext == ".vue":
         return FileType.CODE_VUE
 
-    # ── Documentation ──
+    if ext == ".html":
+        return FileType.TEMPLATE_HTML
 
-    if ext in (".md", ".txt", ".rst"):
+    if ext in (".scss", ".css"):
+        return FileType.STYLE_SCSS
+
+    if ext in (".md", ".rst"):
+        return FileType.DOCUMENT
+
+    if ext == ".txt":
+        # Generic .txt files fall through as documentation; modules.txt
+        # and patches.txt are matched by name above.
         return FileType.DOCUMENT
 
     return None
@@ -237,8 +297,6 @@ def detect(root: str | Path) -> dict:
 
     Args:
         root: Path to the Frappe app root (e.g. ``apps/erpnext``).
-              This should be the directory containing ``pyproject.toml``
-              or ``setup.py`` and the app package directory.
 
     Returns:
         A dict with:
@@ -257,7 +315,6 @@ def detect(root: str | Path) -> dict:
     for dirpath, dirnames, filenames in os.walk(app_root, followlinks=False):
         dp = Path(dirpath)
 
-        # Prune directories in-place so os.walk never descends into them
         dirnames[:] = [
             d for d in dirnames
             if not _should_skip_dir(d)

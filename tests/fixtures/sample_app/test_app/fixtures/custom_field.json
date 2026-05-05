@@ -1,0 +1,11 @@
+[
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Order-region",
+  "dt": "Sales Order",
+  "fieldname": "region",
+  "fieldtype": "Data",
+  "label": "Region",
+  "insert_after": "customer"
+ }
+]

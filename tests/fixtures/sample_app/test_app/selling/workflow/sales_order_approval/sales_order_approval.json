@@ -1,0 +1,13 @@
+{
+ "doctype": "Workflow",
+ "name": "Sales Order Approval",
+ "document_type": "Sales Order",
+ "is_active": 1,
+ "states": [
+  {"state": "Draft", "doc_status": "0"},
+  {"state": "Approved", "doc_status": "1"}
+ ],
+ "transitions": [
+  {"state": "Draft", "action": "Approve", "next_state": "Approved", "allowed": "Sales Manager"}
+ ]
+}

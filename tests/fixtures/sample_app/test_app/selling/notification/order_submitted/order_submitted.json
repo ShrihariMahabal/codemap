@@ -1,0 +1,12 @@
+{
+ "doctype": "Notification",
+ "name": "Order Submitted",
+ "document_type": "Sales Order",
+ "event": "Submit",
+ "channel": "Email",
+ "enabled": 1,
+ "subject": "Sales Order {{ doc.name }} submitted",
+ "recipients": [
+  {"receiver_by_role": "Sales Manager"}
+ ]
+}

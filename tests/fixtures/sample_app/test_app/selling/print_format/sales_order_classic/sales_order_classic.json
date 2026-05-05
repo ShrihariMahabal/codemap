@@ -1,0 +1,7 @@
+{
+ "doctype": "Print Format",
+ "name": "Sales Order Classic",
+ "doc_type": "Sales Order",
+ "module": "Selling",
+ "standard": "Yes"
+}

@@ -1,0 +1,11 @@
+[
+ {
+  "doctype": "Property Setter",
+  "name": "Sales Order-customer-reqd",
+  "doc_type": "Sales Order",
+  "field_name": "customer",
+  "property": "reqd",
+  "value": "1",
+  "property_type": "Check"
+ }
+]
