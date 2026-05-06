@@ -832,3 +832,36 @@ class TestSmoke:
         assert total_edges > 0
         assert total_nodes < 1000
         assert total_edges < 1000
+
+
+class TestListShapedJson:
+    """Frappe ``test_records.json`` files are JSON arrays — extractors
+    classified them by their first element's ``doctype`` and then
+    crashed when calling ``.get()`` on a list.  Every JSON extractor
+    must skip them cleanly instead.
+    """
+
+    @pytest.fixture
+    def list_shaped_json(self, tmp_path: Path) -> Path:
+        path = tmp_path / "test_records.json"
+        path.write_text(
+            '[{"doctype": "Report", "name": "Foo"}, '
+            '{"doctype": "Report", "name": "Bar"}]',
+            encoding="utf-8",
+        )
+        return path
+
+    @pytest.mark.parametrize("extractor", [
+        extract_record,
+        extract_notification,
+        extract_workflow,
+        extract_doctype,
+        extract_server_script,
+        extract_client_script,
+        extract_custom_field,
+        extract_property_setter,
+    ])
+    def test_returns_empty_result(self, extractor, list_shaped_json):
+        result = extractor(list_shaped_json)
+        assert result["nodes"] == []
+        assert result["edges"] == []
