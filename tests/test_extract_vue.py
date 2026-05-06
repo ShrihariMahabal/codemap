@@ -87,3 +87,60 @@ const count = ref(0)
 ''')
         import_edges = [e for e in result["edges"] if e["relation"] == "imports_from"]
         assert len(import_edges) >= 1
+
+
+class TestVueTemplateComponents:
+    """<template> block is scanned for PascalCase component tags."""
+
+    def _extract_snippet(self, content: str) -> dict:
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".vue", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(content)
+            f.flush()
+            return extract_vue(Path(f.name))
+
+    def test_pascal_case_tag_emits_edge(self):
+        result = self._extract_snippet(
+            "<template><EmployeeList /></template>",
+        )
+        edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        assert len(edges) == 1
+        assert edges[0]["component"] == "EmployeeList"
+        assert edges[0]["confidence"] == "INFERRED"
+
+    def test_lowercase_tag_ignored(self):
+        result = self._extract_snippet(
+            "<template><div><span>hello</span></div></template>",
+        )
+        rt_edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        assert rt_edges == []
+
+    def test_vue_builtins_ignored(self):
+        result = self._extract_snippet(
+            "<template><Transition><div/></Transition><KeepAlive/></template>",
+        )
+        rt_edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        assert rt_edges == []
+
+    def test_multiple_components(self):
+        result = self._extract_snippet(
+            "<template><Header /><Footer /><Sidebar /></template>",
+        )
+        edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        components = {e["component"] for e in edges}
+        assert components == {"Header", "Footer", "Sidebar"}
+
+    def test_dedupes_same_component(self):
+        result = self._extract_snippet(
+            "<template><Card /><Card /><Card /></template>",
+        )
+        edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        assert len(edges) == 1
+
+    def test_fixture_app_vue(self):
+        result = extract_vue(APP_VUE)
+        edges = [e for e in result["edges"] if e["relation"] == "renders_template"]
+        components = {e["component"] for e in edges}
+        assert "EmployeeList" in components
