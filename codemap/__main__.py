@@ -120,6 +120,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     """
     from .extract_js import extract_js
     from .extract_python import extract_python
+    from .extract_style import extract_style
+    from .extract_template import extract_template
     from .extract_vue import extract_vue
     from .frappe_extract import (
         extract_client_script,
@@ -151,6 +153,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         ("Python",       "code_py",          extract_python),
         ("JavaScript",   "code_js",          extract_js),
         ("Vue",          "code_vue",         extract_vue),
+        ("Template",     "template_html",    extract_template),
+        ("Style",        "style_scss",       extract_style),
         ("DocType JSON", "doctype_json",     extract_doctype),
         ("Hooks",        "hooks",            extract_hooks),
         ("Dashboard",    "dashboard",        extract_dashboard),
