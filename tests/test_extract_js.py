@@ -253,3 +253,55 @@ defineEmits(['save', 'cancel']);
         edges = [e for e in result["edges"] if e["relation"] == "emits_event"]
         events = {e["event"] for e in edges}
         assert events == {"save", "cancel"}
+
+
+class TestFrappeUiComposables:
+    """createResource / useFetch produce calls_api edges."""
+
+    def _extract_snippet(self, code: str) -> dict:
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(code)
+            f.flush()
+            return extract_js(Path(f.name))
+
+    def test_create_resource_top_level(self):
+        """Module-scope createResource({url: ...}) is detected."""
+        result = self._extract_snippet(
+            'const opts = createResource({ url: "test_app.api.get_items" });',
+        )
+        api_edges = [e for e in result["edges"] if e["relation"] == "calls_api"]
+        assert len(api_edges) == 1
+        assert api_edges[0]["api_path"] == "test_app.api.get_items"
+        assert api_edges[0]["via"] == "createResource"
+        assert api_edges[0]["confidence"] == "INFERRED"
+
+    def test_use_fetch_top_level(self):
+        """Module-scope useFetch("...") is detected."""
+        result = self._extract_snippet(
+            'const data = useFetch("test_app.api.fetch_data");',
+        )
+        api_edges = [e for e in result["edges"] if e["relation"] == "calls_api"]
+        assert len(api_edges) == 1
+        assert api_edges[0]["api_path"] == "test_app.api.fetch_data"
+        assert api_edges[0]["via"] == "useFetch"
+
+    def test_create_resource_inside_function(self):
+        """createResource inside a function body is still detected."""
+        result = self._extract_snippet('''
+function setup() {
+    const r = createResource({ url: "test_app.api.inner" });
+}
+''')
+        api_edges = [e for e in result["edges"] if e["relation"] == "calls_api"]
+        assert any(e["api_path"] == "test_app.api.inner" for e in api_edges)
+
+    def test_no_url_property_skipped(self):
+        """createResource without a url property emits nothing."""
+        result = self._extract_snippet(
+            'const r = createResource({ method: "something" });',
+        )
+        api_edges = [e for e in result["edges"] if e["relation"] == "calls_api"]
+        assert api_edges == []
