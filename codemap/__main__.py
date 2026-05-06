@@ -4,6 +4,7 @@ Usage:
     python -m codemap detect <app_path>           # File detection
     python -m codemap detect --update <app_path>  # Incremental detection
     python -m codemap extract <app_path>          # Full extraction
+    python -m codemap analyze <app_path>          # Build + cluster + analyse
 """
 
 from __future__ import annotations
@@ -219,6 +220,83 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_analyze(args: argparse.Namespace) -> None:
+    """Build the graph from a saved extraction and print a summary.
+
+    Phase 6 deliverable: turn the JSON produced by ``extract`` into a
+    NetworkX graph, run community detection, and surface god nodes,
+    surprises, suggested questions and a role/permission matrix.  The
+    full markdown report comes in Phase 7 — for now we save a JSON
+    blob and print headline numbers.
+    """
+    from .analyze import (
+        god_nodes,
+        permission_matrix,
+        suggest_questions,
+        surprising_connections,
+    )
+    from .build import build_from_extraction
+    from .cluster import cluster, label_communities, score_all
+
+    app_path = Path(args.app_path)
+    if not app_path.is_dir():
+        print(f"error: {app_path} is not a directory", file=sys.stderr)
+        sys.exit(1)
+
+    extraction_path = app_path / "codemap-out" / "extraction.json"
+    if not extraction_path.is_file():
+        print(
+            f"error: {extraction_path} not found — run "
+            f"`python -m codemap extract {app_path}` first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    extraction = json.loads(extraction_path.read_text(encoding="utf-8"))
+    G = build_from_extraction(extraction)
+
+    communities = cluster(G)
+    labels = label_communities(G, communities)
+    cohesion = score_all(G, communities)
+
+    gods = god_nodes(G)
+    surprises = surprising_connections(G, communities)
+    questions = suggest_questions(G, communities, labels)
+    permissions = permission_matrix(G)
+
+    print(f"\n  codemap — analysis")
+    print(f"  {'─' * 40}")
+    print(f"  {'nodes':<20s} {G.number_of_nodes():>5d}")
+    print(f"  {'edges':<20s} {G.number_of_edges():>5d}")
+    print(f"  {'communities':<20s} {len(communities):>5d}")
+    print(f"  {'god nodes':<20s} {len(gods):>5d}")
+    print(f"  {'surprises':<20s} {len(surprises):>5d}")
+    print(f"  {'questions':<20s} {len(questions):>5d}")
+    print(f"  {'permission rows':<20s} {len(permissions):>5d}")
+    print()
+
+    out_path = app_path / "codemap-out" / "analysis.json"
+    out_path.write_text(
+        json.dumps({
+            "communities": {
+                str(cid): {
+                    "label": labels.get(cid, f"Community {cid}"),
+                    "cohesion": cohesion.get(cid, 0.0),
+                    "members": members,
+                }
+                for cid, members in communities.items()
+            },
+            "god_nodes": gods,
+            "surprising_connections": surprises,
+            "suggested_questions": questions,
+            "permission_matrix": permissions,
+        }, indent=2),
+        encoding="utf-8",
+    )
+    print(f"  saved → {out_path}")
+    print()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="codemap",
@@ -242,12 +320,21 @@ def main(argv: list[str] | None = None) -> None:
     )
     extract_parser.add_argument("app_path", help="Path to the Frappe app root.")
 
+    # analyze subcommand
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Build graph, run clustering and analysis on a prior extraction.",
+    )
+    analyze_parser.add_argument("app_path", help="Path to the Frappe app root.")
+
     args = parser.parse_args(argv)
 
     if args.command == "detect":
         _cmd_detect(args)
     elif args.command == "extract":
         _cmd_extract(args)
+    elif args.command == "analyze":
+        _cmd_analyze(args)
 
 
 if __name__ == "__main__":
