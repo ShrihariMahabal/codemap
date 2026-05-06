@@ -39,7 +39,7 @@ def extract_record(path: Path) -> dict:
     JSON whose ``name`` field is missing or empty.
     """
     data = load_json(path)
-    if not data:
+    if not isinstance(data, dict):
         return empty_result()
 
     kind = data.get("doctype")

@@ -47,7 +47,7 @@ from ._common import empty_result, file_line_count, load_json
 def extract_workflow(path: Path) -> dict:
     """Extract graph nodes and edges from a single workflow JSON file."""
     data = load_json(path)
-    if not data or data.get("doctype") != "Workflow":
+    if not isinstance(data, dict) or data.get("doctype") != "Workflow":
         return empty_result()
 
     name = data.get("name")

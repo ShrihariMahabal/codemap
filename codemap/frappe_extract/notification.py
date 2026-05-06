@@ -46,7 +46,7 @@ from ._common import empty_result, file_line_count, load_json
 def extract_notification(path: Path) -> dict:
     """Extract graph nodes and edges from a notification JSON file."""
     data = load_json(path)
-    if not data or data.get("doctype") != "Notification":
+    if not isinstance(data, dict) or data.get("doctype") != "Notification":
         return empty_result()
 
     name = data.get("name")

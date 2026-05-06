@@ -13,13 +13,14 @@ import json
 from pathlib import Path
 
 
-def load_json(path: Path) -> dict | None:
+def load_json(path: Path) -> dict | list | None:
     """Read and parse a JSON file.
 
-    Returns ``None`` if the file is missing, unreadable, or malformed.
-    Sub-extractors treat ``None`` as "skip this file" — they never raise
-    on bad input, because the detection phase may have classified a file
-    that turns out to be invalid by the time we read it.
+    Returns ``None`` for files that are missing, unreadable, or
+    malformed.  The top-level value is returned verbatim — Frappe
+    fixture files are sometimes single objects and sometimes JSON
+    arrays of records, so callers must handle both shapes (or check
+    :func:`isinstance` and bail out for the one they can't read).
     """
     try:
         with open(path, encoding="utf-8") as f:

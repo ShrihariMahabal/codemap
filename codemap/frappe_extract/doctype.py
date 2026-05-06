@@ -86,7 +86,7 @@ def extract_doctype(path: Path) -> dict:
     call on any JSON file.
     """
     data = load_json(path)
-    if not data or data.get("doctype") != "DocType":
+    if not isinstance(data, dict) or data.get("doctype") != "DocType":
         return empty_result()
 
     name = data.get("name")
