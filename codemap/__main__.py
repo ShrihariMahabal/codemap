@@ -5,6 +5,7 @@ Usage:
     python -m codemap detect --update <app_path>  # Incremental detection
     python -m codemap extract <app_path>          # Full extraction
     python -m codemap analyze <app_path>          # Build + cluster + analyse
+    python -m codemap report  <app_path>          # Render report + graph artefacts
 """
 
 from __future__ import annotations
@@ -297,6 +298,91 @@ def _cmd_analyze(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_report(args: argparse.Namespace) -> None:
+    """Render the final triage artefacts: report + JSON + HTML.
+
+    Builds on the JSON written by ``analyze`` so the heavy graph
+    construction only runs once.  The three outputs land under
+    ``codemap-out/``: ``CODEMAP_REPORT.md`` for humans,
+    ``graph.json`` for tooling, and ``graph.html`` for interactive
+    exploration.
+    """
+    from .analyze import (
+        god_nodes,
+        permission_matrix,
+        suggest_questions,
+        surprising_connections,
+    )
+    from .build import build_from_extraction
+    from .cluster import cluster, label_communities, score_all
+    from .detect import detect
+    from .export import to_html, to_json
+    from .report import generate as generate_report
+
+    app_path = Path(args.app_path)
+    if not app_path.is_dir():
+        print(f"error: {app_path} is not a directory", file=sys.stderr)
+        sys.exit(1)
+
+    extraction_path = app_path / "codemap-out" / "extraction.json"
+    if not extraction_path.is_file():
+        print(
+            f"error: {extraction_path} not found — run "
+            f"`python -m codemap extract {app_path}` first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    extraction = json.loads(extraction_path.read_text(encoding="utf-8"))
+    G = build_from_extraction(extraction)
+
+    detection_result = detect(app_path)
+    communities = cluster(G)
+    labels = label_communities(G, communities)
+    cohesion = score_all(G, communities)
+
+    gods = god_nodes(G)
+    surprises = surprising_connections(G, communities)
+    questions = suggest_questions(G, communities, labels)
+    permissions = permission_matrix(G)
+
+    report_text = generate_report(
+        G,
+        detection=detection_result,
+        communities=communities,
+        community_labels=labels,
+        cohesion=cohesion,
+        god_node_list=gods,
+        surprises=surprises,
+        questions=questions,
+        permissions=permissions,
+        app_root=str(app_path),
+    )
+
+    out_dir = app_path / "codemap-out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    report_path = out_dir / "CODEMAP_REPORT.md"
+    report_path.write_text(report_text, encoding="utf-8")
+
+    json_path = out_dir / "graph.json"
+    to_json(G, communities, labels, json_path, force=args.force)
+
+    html_path = out_dir / "graph.html"
+    try:
+        to_html(G, communities, labels, html_path)
+        html_status = f"saved → {html_path}"
+    except ValueError as exc:
+        html_status = f"skipped graph.html ({exc})"
+
+    print(f"\n  codemap — report")
+    print(f"  {'─' * 40}")
+    print(f"  saved → {report_path}")
+    print(f"  saved → {json_path}")
+    print(f"  {html_status}")
+    print()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="codemap",
@@ -327,6 +413,17 @@ def main(argv: list[str] | None = None) -> None:
     )
     analyze_parser.add_argument("app_path", help="Path to the Frappe app root.")
 
+    # report subcommand
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Render CODEMAP_REPORT.md plus graph.json and graph.html.",
+    )
+    report_parser.add_argument("app_path", help="Path to the Frappe app root.")
+    report_parser.add_argument(
+        "--force", action="store_true",
+        help="Overwrite existing graph.json even if the new graph is smaller.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "detect":
@@ -335,6 +432,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_extract(args)
     elif args.command == "analyze":
         _cmd_analyze(args)
+    elif args.command == "report":
+        _cmd_report(args)
 
 
 if __name__ == "__main__":
