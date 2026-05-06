@@ -1,8 +1,15 @@
 """Vue SFC extraction.
 
-Extracts the <script> or <script setup> block from .vue files and
-parses it as JavaScript using the JS extractor. Template blocks are
-not parsed (no useful graph edges in HTML templates).
+Extracts the ``<script>`` or ``<script setup>`` block from ``.vue`` files
+and parses it as JavaScript using the JS extractor.  The ``<template>``
+block is also scanned for child-component references — every
+``<EmployeeAvatar />`` style tag becomes a ``renders_template`` edge so
+the graph captures parent → child component composition.
+
+Native HTML elements (``<div>``, ``<span>``, ...) and Vue built-ins
+(``<template>``, ``<slot>``, ``<transition>``, ``<component>``) are not
+emitted as edges — they aren't user-defined components and would just
+add noise.
 """
 
 from __future__ import annotations
@@ -11,7 +18,7 @@ import re
 from pathlib import Path
 
 from .extract_js import extract_js as _extract_js_from_source
-from .graph_primitives import make_id, make_node
+from .graph_primitives import make_edge, make_id, make_node
 
 
 # Match <script> or <script setup> blocks, capturing the content.
@@ -20,6 +27,69 @@ _SCRIPT_PATTERN = re.compile(
     r"<script(?:\s+setup)?[^>]*>(.*?)</script>",
     re.DOTALL | re.IGNORECASE,
 )
+
+# Match the top-level <template> block of a Vue SFC.
+_TEMPLATE_PATTERN = re.compile(
+    r"<template(?:\s[^>]*)?>(.*?)</template>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Match an opening or self-closing tag whose name starts with an
+# uppercase letter — Vue's convention for user-defined components.
+# Examples that match: ``<EmployeeAvatar``, ``<MonthViewTable``,
+# ``<FeatherIcon``.  Examples that don't: ``<div``, ``<span``, ``<img``.
+_COMPONENT_TAG_PATTERN = re.compile(r"<([A-Z][A-Za-z0-9_]*)\b")
+
+# Vue built-ins that happen to be PascalCase but aren't user components.
+_VUE_BUILTINS: frozenset[str] = frozenset({
+    "Transition", "TransitionGroup", "KeepAlive", "Teleport", "Suspense",
+    "Component",
+})
+
+
+def _extract_template_components(
+    source: str,
+    str_path: str,
+    file_nid: str,
+) -> list[dict]:
+    """Return ``renders_template`` edges for components used in <template>.
+
+    Vue's component convention is straightforward: PascalCase tags are
+    user-defined components, lowercase tags are native HTML.  We scan
+    the first ``<template>`` block (Vue SFCs only allow one) and emit
+    one edge per distinct component reference, with the line number of
+    the first occurrence.
+    """
+    match = _TEMPLATE_PATTERN.search(source)
+    if not match:
+        return []
+
+    block = match.group(1)
+    block_start = match.start(1)
+
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    for tag_match in _COMPONENT_TAG_PATTERN.finditer(block):
+        component = tag_match.group(1)
+        if component in _VUE_BUILTINS or component in seen:
+            continue
+        seen.add(component)
+
+        absolute_offset = block_start + tag_match.start()
+        line = source.count("\n", 0, absolute_offset) + 1
+
+        edges.append(make_edge(
+            file_nid,
+            make_id(component),
+            "renders_template",
+            str_path,
+            line,
+            confidence="INFERRED",
+            component=component,
+        ))
+
+    return edges
 
 
 def _find_script_block(source: str) -> tuple[str, int] | None:
@@ -62,10 +132,19 @@ def extract_vue(path: Path) -> dict:
         1, source_text.count("\n") + 1,
     )
 
+    template_edges = _extract_template_components(
+        source_text, str_path, file_nid,
+    )
+
     result = _find_script_block(source_text)
     if not result:
-        # Vue file with no script block — just return the file node
-        return {"nodes": [file_node], "edges": [], "raw_calls": []}
+        # Vue file with no script block — emit the file node and any
+        # component references we found in the template.
+        return {
+            "nodes": [file_node],
+            "edges": template_edges,
+            "raw_calls": [],
+        }
 
     script_content, line_offset = result
 
@@ -115,6 +194,7 @@ def extract_vue(path: Path) -> dict:
     if old_file_nid != new_file_nid:
         _rewrite_ids(js_result, old_file_nid, new_file_nid)
 
+    js_result["edges"].extend(template_edges)
     return js_result
 
 
