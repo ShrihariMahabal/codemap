@@ -178,7 +178,7 @@ def label_communities(
 
         if labelled and module_counts:
             top_module, top_count = module_counts.most_common(1)[0]
-            if top_count / labelled >= _MODULE_DOMINANCE_THRESHOLD:
+            if top_count / labelled > _MODULE_DOMINANCE_THRESHOLD:
                 labels[cid] = top_module
                 continue
 
