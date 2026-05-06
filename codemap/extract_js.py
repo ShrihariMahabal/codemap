@@ -10,6 +10,7 @@ patterns from .js files:
 - frappe.realtime.on("event", ...) — subscribes_to_event edges
 - frappe.listview_settings["DT"] = {...} — extends_list_view edges
 - cur_frm.cscript.xxx = "DocType" — references to DocType
+- createResource({url: "..."}) / useFetch("...") — frappe-ui composables → calls_api
 - ES6 class declarations
 """
 
@@ -152,6 +153,84 @@ def _first_call_object_arg(call_node, source: bytes):
         if child.type == "object":
             return child
     return None
+
+
+def _try_frappe_ui_call(call_node, func_text: str, source: bytes,
+                        caller_nid: str, str_path: str) -> dict | None:
+    """Return a calls_api edge if *call_node* is a frappe-ui composable.
+
+    The two patterns we recognise:
+
+    - ``createResource({ url: "dotted.path", ... })`` — wraps the URL
+      property in a reactive resource.
+    - ``useFetch("dotted.path", ...)`` — bare-bones HTTP composable.
+
+    Both name a Python whitelisted method, so we treat them exactly
+    like ``frappe.call`` for the purpose of the call graph.
+    """
+    if func_text == "createResource":
+        obj = _first_call_object_arg(call_node, source)
+        api_path = (
+            _find_string_property(obj, source, "url")
+            if obj is not None else None
+        )
+        via = "createResource"
+    elif func_text == "useFetch":
+        api_path = _first_call_string_arg(call_node, source)
+        via = "useFetch"
+    else:
+        return None
+
+    if not api_path:
+        return None
+
+    return make_edge(
+        caller_nid,
+        make_id(api_path),
+        "calls_api",
+        str_path,
+        call_node.start_point[0] + 1,
+        confidence="INFERRED",
+        api_path=api_path,
+        via=via,
+    )
+
+
+def _extract_top_level_frappe_ui(
+    root, source: bytes, file_nid: str, str_path: str,
+) -> list[dict]:
+    """Scan module-scope code for ``createResource`` / ``useFetch`` calls.
+
+    Vue 3 SFCs typically place these at the top of ``<script setup>``,
+    bound to a ``const`` — outside any function body — so the regular
+    call-graph pass (which only walks function bodies) doesn't see them.
+    We walk the AST once, stopping at function boundaries to avoid
+    double-counting calls that ``walk_calls`` will pick up later.
+    """
+    edges: list[dict] = []
+
+    def visit(node) -> None:
+        if node.type in (
+            "function_declaration", "arrow_function",
+            "function_expression", "method_definition",
+        ):
+            return
+
+        if node.type == "call_expression":
+            func = node.child_by_field_name("function")
+            if func is not None:
+                func_text = read_node_text(func, source)
+                edge = _try_frappe_ui_call(
+                    node, func_text, source, file_nid, str_path,
+                )
+                if edge is not None:
+                    edges.append(edge)
+
+        for child in node.children:
+            visit(child)
+
+    visit(root)
+    return edges
 
 
 # ── frappe.ui.form.on extraction ───────────────────────────────────────────
@@ -580,6 +659,11 @@ def extract_js(path: Path) -> dict:
 
     walk(root)
 
+    # Module-scope frappe-ui composables (createResource, useFetch).
+    # Vue 3 SFCs put these outside any function body, so the call-graph
+    # pass below doesn't see them — they need their own walk.
+    edges.extend(_extract_top_level_frappe_ui(root, source, file_nid, str_path))
+
     # ── Call-graph pass ────────────────────────────────────────────────────
     seen_call_pairs: set[tuple[str, str]] = set()
 
@@ -659,6 +743,14 @@ def extract_js(path: Path) -> dict:
                             confidence="INFERRED",
                             event=event,
                         ))
+
+                # createResource({url: ...}) / useFetch("...") —
+                # frappe-ui composables that wrap a whitelisted Python
+                # method.  Same calls_api edge as frappe.call.
+                elif (frappe_ui_edge := _try_frappe_ui_call(
+                    node, func_text, source, caller_nid, str_path,
+                )):
+                    edges.append(frappe_ui_edge)
 
                 # frappe.client.* — DocType lives inside an options object.
                 elif func_text in _JS_CLIENT_METHODS:
